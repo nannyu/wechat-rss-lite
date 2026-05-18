@@ -1,0 +1,106 @@
+# wechat-rss-lite
+
+Lightweight Apache-2.0 toolkit for integrating WeChat public article parsing and RSS generation into other Python projects.
+
+The package is designed as **library first, API optional**:
+
+- Parse public WeChat article URLs into structured data.
+- Generate RSS 2.0 from normalized article objects.
+- Store subscriptions and cached articles in a small SQLite repository.
+- Expose an optional FastAPI app for projects that want HTTP endpoints.
+- Avoid bundling account-specific crawling logic into the core. Authenticated discovery can be provided through a small adapter interface.
+- Provide product scaffolding for QR login providers, credential expiry notifications, account search/list adapters, RSS polling, image proxying, proxy rotation, request limiting, webhooks, and an admin page.
+
+## Install
+
+```bash
+pip install -e ".[api,dev]"
+```
+
+## Library Usage
+
+```python
+import asyncio
+from wechat_rss_lite import WeChatArticleClient, render_rss
+
+async def main():
+    async with WeChatArticleClient() as client:
+        article = await client.fetch_article("https://mp.weixin.qq.com/s/example")
+        xml = render_rss(
+            title="My Feed",
+            link="https://example.com/rss.xml",
+            description="Selected WeChat articles",
+            articles=[article],
+        )
+        print(xml)
+
+asyncio.run(main())
+```
+
+## Optional API
+
+```bash
+uvicorn wechat_rss_lite.api:create_app --factory --host 127.0.0.1 --port 8080
+```
+
+Endpoints:
+
+- `POST /articles/parse`
+- `POST /rss/render`
+- `GET /health`
+- `POST /login/sessions`
+- `GET /accounts/search`
+- `GET /accounts/{account_id}/articles`
+- `POST /subscriptions`
+- `POST /poll`
+- `GET /feeds/{subscription_id}.rss`
+- `GET /image?url=...`
+- `GET /admin`
+
+## Optional Browser-Compatible TLS Transport
+
+The default client uses `httpx` to keep the package small. If an authorized deployment needs a browser-compatible TLS stack, install the optional transport explicitly:
+
+```bash
+pip install "wechat-rss-lite[tls]"
+```
+
+```python
+from wechat_rss_lite import CurlCffiArticleClient
+
+client = CurlCffiArticleClient(impersonate="chrome")
+```
+
+## Design
+
+The core is intentionally small:
+
+- `parser.py` extracts article metadata and content from HTML.
+- `client.py` performs bounded HTTP fetches with timeouts and retries.
+- `rss.py` renders standards-compliant RSS without a template engine.
+- `storage.py` provides a SQLite repository for embedding projects.
+- `service.py` composes the pieces for application use.
+
+For authenticated account search, article list pagination, or tenant-specific credentials, implement `AccountProvider` in your host project. This keeps credentials, rate limits, and platform-policy decisions outside the reusable package.
+
+```python
+from wechat_rss_lite import AccountProvider, AccountProfile, ArticleSummary
+
+class MyAccountProvider(AccountProvider):
+    async def search_accounts(self, query: str, *, limit: int = 10) -> list[AccountProfile]:
+        ...
+
+    async def list_articles(
+        self,
+        account_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 20,
+        keyword: str = "",
+    ) -> list[ArticleSummary]:
+        ...
+```
+
+## License
+
+Apache-2.0. See `LICENSE` and `NOTICE`.

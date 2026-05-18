@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class Settings:
+    db_path: Path = Path("wechat-rss-lite.db")
+    site_url: str = "http://localhost:8080"
+    poll_interval_seconds: int = 3600
+    request_timeout_seconds: float = 15.0
+    request_retries: int = 2
+    rate_limit_per_minute: int = 30
+    article_interval_seconds: float = 1.0
+    proxy_urls: tuple[str, ...] = ()
+    webhook_url: str = ""
+    admin_token: str = ""
+    allowed_image_hosts: tuple[str, ...] = ("mmbiz.qpic.cn", "mmbiz.qlogo.cn", "mp.weixin.qq.com")
+
+    @classmethod
+    def from_env(cls) -> "Settings":
+        return cls(
+            db_path=Path(os.getenv("WECHAT_RSS_DB_PATH", "wechat-rss-lite.db")),
+            site_url=os.getenv("SITE_URL", "http://localhost:8080").rstrip("/"),
+            poll_interval_seconds=_int("RSS_POLL_INTERVAL", 3600),
+            request_timeout_seconds=_float("REQUEST_TIMEOUT_SECONDS", 15.0),
+            request_retries=_int("REQUEST_RETRIES", 2),
+            rate_limit_per_minute=_int("RATE_LIMIT_PER_MINUTE", 30),
+            article_interval_seconds=_float("ARTICLE_INTERVAL_SECONDS", 1.0),
+            proxy_urls=_csv("PROXY_URLS"),
+            webhook_url=os.getenv("WEBHOOK_URL", ""),
+            admin_token=os.getenv("ADMIN_API_TOKEN", ""),
+            allowed_image_hosts=_csv("ALLOWED_IMAGE_HOSTS")
+            or ("mmbiz.qpic.cn", "mmbiz.qlogo.cn", "mp.weixin.qq.com"),
+        )
+
+
+def _csv(name: str) -> tuple[str, ...]:
+    return tuple(value.strip() for value in os.getenv(name, "").split(",") if value.strip())
+
+
+def _int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
