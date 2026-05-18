@@ -25,10 +25,10 @@ class _MetaExtractor(HTMLParser):
             self.meta[name.lower()] = html.unescape(content).strip()
 
 
-def parse_article_html(raw_html: str, url: str) -> Article:
+def parse_article_html(raw_html: str, url: str, *, image_proxy_base: str = "") -> Article:
     meta = _extract_meta(raw_html)
     script_vars = extract_script_vars(raw_html)
-    content = process_article_content(raw_html, url)
+    content = process_article_content(raw_html, url, image_proxy_base=image_proxy_base)
     title = _first(
         meta.get("og:title"),
         meta.get("twitter:title"),

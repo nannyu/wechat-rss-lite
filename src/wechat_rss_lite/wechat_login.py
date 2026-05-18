@@ -260,6 +260,7 @@ def _replace_session(session: LoginSession, *, status: LoginStatus, message: str
         qrcode_url=session.qrcode_url,
         status=status,
         message=message,
+        confirm_url=session.confirm_url,
         created_at=session.created_at,
         expires_at=session.expires_at,
     )

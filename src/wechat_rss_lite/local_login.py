@@ -31,6 +31,7 @@ class LocalQrLoginProvider:
             qrcode_url=segno.make(confirm_url).svg_data_uri(scale=6),
             status=LoginStatus.PENDING,
             message="请扫码打开确认页。",
+            confirm_url=confirm_url,
             expires_at=expires_at,
         )
         self._sessions[session_id] = session
@@ -85,7 +86,7 @@ def _replace_session(session: LoginSession, *, status: LoginStatus, message: str
         qrcode_url=session.qrcode_url,
         status=status,
         message=message,
+        confirm_url=session.confirm_url,
         created_at=session.created_at,
         expires_at=session.expires_at,
     )
-

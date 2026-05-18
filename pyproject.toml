@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 api = [
   "fastapi>=0.110,<1",
+  "python-dotenv>=1.0,<2",
   "python-multipart>=0.0.9,<1",
   "uvicorn[standard]>=0.27,<1",
 ]
@@ -35,6 +36,12 @@ dev = [
 
 [project.scripts]
 wechat-rss-lite = "wechat_rss_lite.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wechat_rss_lite"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/wechat_rss_lite/admin/assets" = "wechat_rss_lite/admin/assets"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

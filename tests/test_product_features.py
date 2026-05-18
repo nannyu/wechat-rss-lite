@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from wechat_rss_lite.adapters import AccountProfile, ArticleSummary
+from wechat_rss_lite.client import WeChatArticleClient
 from wechat_rss_lite.models import Article, Credential, Subscription
 from wechat_rss_lite.parser import parse_article_html
 from wechat_rss_lite.poller import RssPoller
@@ -107,6 +108,23 @@ def test_storage_credentials_and_poll_runs(tmp_path) -> None:
 
     assert repo.get_credential().account_name == "Acct"
     assert repo.get_credential().is_expired is False
+
+
+def test_article_client_uses_saved_wechat_credentials() -> None:
+    credential = Credential(id="default", token="token-1", cookie="wxuin=abc")
+    client = WeChatArticleClient(credential_getter=lambda: credential)
+
+    try:
+        url = client._url_with_token("https://mp.weixin.qq.com/s/a?__biz=biz")
+        headers = client._headers_for_request()
+    finally:
+        # No request was made, but close the owned httpx client cleanly in async tests.
+        import asyncio
+
+        asyncio.run(client.aclose())
+
+    assert "token=token-1" in url
+    assert headers["Cookie"] == "wxuin=abc"
 
 
 class FakeProvider:

@@ -193,6 +193,7 @@ class SQLiteRepository:
         *,
         source: str | None = None,
         category_id: int | None = None,
+        status: str | None = None,
     ) -> list[Article]:
         conditions: list[str] = []
         params_list: list[object] = []
@@ -202,6 +203,9 @@ class SQLiteRepository:
         if source:
             conditions.append("a.source = ?")
             params_list.append(source)
+        if status:
+            conditions.append("a.status = ?")
+            params_list.append(status)
         join = ""
         if category_id is not None:
             join = "join subscriptions s on s.id = a.subscription_id"
@@ -237,6 +241,78 @@ class SQLiteRepository:
                 source=row["source"] if "source" in row.keys() else "poll",
                 published_at=_parse_dt(row["published_at"]) if row["published_at"] else None,
             )
+            for row in rows
+        ]
+
+    def get_article(self, url: str) -> Article | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select url, title, author, account_name, summary, content_html, text,
+                       content_type, unavailable_reason, status, source, published_at
+                from articles
+                where url = ?
+                """,
+                (url,),
+            ).fetchone()
+        if not row:
+            return None
+        return Article(
+            url=row["url"],
+            title=row["title"],
+            author=row["author"] or "",
+            account_name=row["account_name"] or "",
+            summary=row["summary"] or "",
+            content_html=row["content_html"] or "",
+            text=row["text"] or "",
+            content_type=row["content_type"] or "rich_text",
+            unavailable_reason=row["unavailable_reason"] or "",
+            status=row["status"] if "status" in row.keys() else _status_from_content_type(row["content_type"] or "rich_text"),
+            source=row["source"] if "source" in row.keys() else "poll",
+            published_at=_parse_dt(row["published_at"]) if row["published_at"] else None,
+        )
+
+    def article_refresh_targets(
+        self,
+        *,
+        url: str | None = None,
+        subscription_id: str | None = None,
+        status: str | None = "fetched",
+        limit: int | None = 50,
+    ) -> list[dict[str, str]]:
+        conditions: list[str] = []
+        params: list[object] = []
+        if url:
+            conditions.append("url = ?")
+            params.append(url)
+        if subscription_id:
+            conditions.append("subscription_id = ?")
+            params.append(subscription_id)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+        where = f"where {' and '.join(conditions)}" if conditions else ""
+        limit_clause = ""
+        if limit is not None and limit > 0:
+            limit_clause = "limit ?"
+            params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                select url, subscription_id, source
+                from articles
+                {where}
+                order by coalesce(published_at, fetched_at) desc
+                {limit_clause}
+                """,
+                tuple(params),
+            ).fetchall()
+        return [
+            {
+                "url": row["url"],
+                "subscription_id": row["subscription_id"] or "",
+                "source": row["source"] or "poll",
+            }
             for row in rows
         ]
 

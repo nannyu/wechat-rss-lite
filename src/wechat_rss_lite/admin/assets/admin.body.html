@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WeChat RSS Lite</title>
+  </head>
+<body>
+
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary)"><path d="M4 11a9 9 0 0 1 9 9"></path><path d="M4 4a16 16 0 0 1 16 16"></path><circle cx="5" cy="19" r="1"></circle></svg>
+        WeChat RSS
+      </div>
+      <nav class="sidebar-nav">
+        <div class="nav-item active" onclick="switchTab('dashboard')" id="tab-dashboard">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"></rect><rect x="14" y="3" width="7" height="5"></rect><rect x="14" y="12" width="7" height="9"></rect><rect x="3" y="16" width="7" height="5"></rect></svg>
+          控制台
+        </div>
+        <div class="nav-item" onclick="switchTab('subscriptions')" id="tab-subscriptions">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          内容订阅
+        </div>
+        <div class="nav-item" onclick="switchTab('reader')" id="tab-reader">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+          文章阅读
+        </div>
+        <div class="nav-item" onclick="switchTab('categories')" id="tab-categories">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
+          RSS 聚合
+        </div>
+        <div class="nav-item" onclick="switchTab('settings')" id="tab-settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          系统设置
+        </div>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content" id="main-content">
+      
+      <!-- Dashboard -->
+      <section id="sec-dashboard" class="page-section active">
+        <div>
+          <h1>控制台</h1>
+          <p class="section-desc">查看系统登录状态及运行健康指标。</p>
+        </div>
+
+        <div class="card">
+          <div class="row" style="margin-bottom: 16px;">
+            <label style="flex: 1; min-width: 220px;">
+              管理令牌
+              <input id="adminToken" type="password" placeholder="从 .env 粘贴 ADMIN_API_TOKEN（仅英文/数字）" autocomplete="off" spellcheck="false">
+            </label>
+            <button class="secondary" onclick="saveAdminToken()">保存令牌</button>
+          </div>
+          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2>微信登录状态</h2>
+            <div class="row">
+              <button onclick="loadStatus()">刷新</button>
+              <button onclick="createLogin()">扫码登录</button>
+              <button class="secondary" onclick="validateCredential()">验证登录</button>
+              <button class="danger" onclick="clearCredential()">清除状态</button>
+            </div>
+          </div>
+          
+          <div id="statusCard" class="status-card warn">
+            <div class="status-line"><span class="status-dot"></span><span id="statusTitle">未登录</span></div>
+            <div id="statusDetails" class="status-details">还没有保存登录凭证。请创建扫码登录会话。</div>
+          </div>
+          <details>
+            <summary>查看原始状态 JSON</summary>
+            <pre id="statusRaw"></pre>
+          </details>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2>健康检查与限频统计</h2>
+            <button class="secondary" onclick="loadStats()">刷新统计</button>
+          </div>
+          <div id="rateLimitSummary" class="status-card">
+            <div class="status-line"><span class="status-dot"></span><span>等待统计数据</span></div>
+            <div class="status-details">用于控制请求节奏和观察等待情况。</div>
+          </div>
+          <details>
+            <summary>查看原始统计数据</summary>
+            <pre id="statsRaw"></pre>
+          </details>
+        </div>
+        
+        <div class="card" id="verificationsCard" style="display: none;">
+          <h2>安全验证任务</h2>
+          <div id="verificationList" class="stack"></div>
+          <details>
+            <summary>查看原始验证数据</summary>
+            <pre id="verifications"></pre>
+          </details>
+        </div>
+      </section>
+
+      <!-- Subscriptions -->
+      <section id="sec-subscriptions" class="page-section">
+        <div>
+          <h1>内容订阅</h1>
+          <p class="section-desc">搜索、添加公众号并管理现有订阅源。</p>
+        </div>
+
+        <!-- Search & Add -->
+        <div class="card">
+          <h2>添加新订阅</h2>
+          <div class="row" style="align-items: flex-end;">
+            <label style="flex: 1; min-width: 200px;">
+              搜索公众号
+              <input id="query" placeholder="输入公众号名称或 ID" onkeydown="if(event.key==='Enter') searchAccounts()">
+            </label>
+            <button onclick="searchAccounts()">搜索</button>
+          </div>
+          <div id="accountResults" style="margin-top: 16px; display: grid; gap: 12px;"></div>
+          <details>
+            <summary>手动添加订阅</summary>
+            <div class="row" style="margin-top: 12px;">
+              <label>公众号 ID <input id="sid" placeholder="biz / account-id"></label>
+              <label>自定义名称 <input id="title" placeholder="如：我的订阅"></label>
+              <button onclick="subscribe()">确认添加</button>
+            </div>
+          </details>
+        </div>
+
+        <div class="card">
+          <h2>批量导入订阅</h2>
+          <div class="col">
+            <label>从文本批量导入 (逗号或换行分隔)
+              <textarea id="bulkText" placeholder="公众号A&#10;公众号B,公众号C"></textarea>
+            </label>
+            <label>从文件导入 (.txt, .csv, .xlsx)
+              <input id="bulkFile" type="file" accept=".txt,.csv,.xlsx">
+            </label>
+            <div>
+              <button onclick="importSubscriptions()">开始导入</button>
+            </div>
+            <pre id="importResult" style="display: none;"></pre>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>创建新分类</h2>
+          <div class="row">
+            <label>分类名称 <input id="categoryName" placeholder="例如：科技"></label>
+            <label>描述说明 <input id="categoryDescription" placeholder="可选"></label>
+            <label>颜色标识 <select id="categoryColor">
+              <option value="blue">蓝色</option>
+              <option value="green">绿色</option>
+              <option value="red">红色</option>
+              <option value="yellow">黄色</option>
+              <option value="purple">紫色</option>
+              <option value="gray">灰色</option>
+            </select></label>
+            <button onclick="createCategory()">保存分类</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>分类列表</h2>
+          <div id="categoryList" class="grid-list"></div>
+        </div>
+
+        <!-- List -->
+        <div class="card">
+          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2>已订阅列表</h2>
+            <div class="row">
+              <button class="secondary" onclick="loadSubscriptions()">刷新</button>
+              <button class="secondary" onclick="refreshAllDownloadedArticles(this)">重新拉取全部文章</button>
+              <button onclick="pollAll()">轮询全部更新</button>
+            </div>
+          </div>
+          <div id="subscriptionList" class="grid-list"></div>
+        </div>
+        
+        <!-- Local Articles View (Modal substitute) -->
+        <div class="card" id="localArticlesCard" style="display: none;">
+          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h2 id="localArticlesTitle">本地文章</h2>
+            <button class="icon-button secondary" onclick="closeLocalArticles()">×</button>
+          </div>
+          <div id="articleList" class="grid-list"></div>
+        </div>
+
+      </section>
+
+      <!-- Reader -->
+      <section id="sec-reader" class="page-section">
+        <div>
+          <h1>文章阅读</h1>
+          <p class="section-desc">查看已经下载到本地数据库的公众号文章内容。</p>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content: space-between; align-items: flex-end; margin-bottom: 16px;">
+            <div class="row" style="align-items: flex-end;">
+              <label>
+                订阅源
+                <select id="readerSubscription" onchange="loadDownloadedArticles()">
+                  <option value="">全部订阅</option>
+                </select>
+              </label>
+              <label>
+                来源
+                <select id="readerSource" onchange="loadDownloadedArticles()">
+                  <option value="">全部来源</option>
+                  <option value="poll">轮询更新</option>
+                  <option value="history">历史下载</option>
+                </select>
+              </label>
+              <label>
+                数量
+                <input id="readerLimit" type="number" min="1" max="500" value="100" onkeydown="if(event.key==='Enter') loadDownloadedArticles()">
+              </label>
+            </div>
+            <button onclick="loadDownloadedArticles()">刷新文章</button>
+          </div>
+          <div class="reader-layout">
+            <div id="downloadedArticleList" class="reader-list">
+              <div class="empty-state">等待加载文章。</div>
+            </div>
+            <div>
+              <div id="readerPlaceholder" class="reader-empty">选择一篇文章开始阅读。</div>
+              <div id="readerArticleActions" class="row" style="display:none; justify-content: flex-end; margin-bottom: 12px;">
+                <button class="secondary" onclick="refreshCurrentReaderArticle(this)">重新拉取当前文章</button>
+              </div>
+              <iframe id="articleReaderFrame" class="reader-frame" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" style="display:none;"></iframe>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Categories & RSS -->
+      <section id="sec-categories" class="page-section">
+        <div>
+          <h1>RSS 聚合</h1>
+          <p class="section-desc">获取聚合 RSS 链接，支持 OPML 和 CSV 导出。</p>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h2>RSS 链接生成</h2>
+            <div class="row">
+              <button class="secondary" onclick="copyAllFeed()">复制所有订阅 RSS</button>
+            </div>
+          </div>
+          <div class="row" style="justify-content: space-between; align-items: flex-end;">
+            <div class="row" style="align-items: flex-end;">
+              <div class="segmented-control">
+                <button id="rssModeSubscriptions" class="active" onclick="setRssBuilderMode('subscriptions')">按公众号</button>
+                <button id="rssModeCategories" onclick="setRssBuilderMode('categories')">按分类</button>
+              </div>
+              <label>
+                模糊查找
+                <input id="rssSearch" placeholder="搜索名称、ID、描述" oninput="renderRssBuilder()">
+              </label>
+            </div>
+            <div class="row">
+              <button class="secondary" onclick="selectVisibleRssItems()">全选</button>
+              <button class="secondary" onclick="invertVisibleRssItems()">反选</button>
+              <button class="secondary" onclick="clearRssSelection()">清空</button>
+            </div>
+          </div>
+          <div id="rssSelectionSummary" class="item-meta" style="margin-top: 12px;">已选择 0 项。</div>
+          <div id="rssBuilderList" class="rss-builder-list"></div>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h2>生成结果</h2>
+            <button onclick="copyGeneratedRssLinks()">复制生成链接</button>
+          </div>
+          <textarea id="generatedRssLinks" class="rss-output" readonly placeholder="选择公众号或分类后，这里会生成 RSS 链接。"></textarea>
+        </div>
+
+        <div class="card">
+          <h2>订阅导出</h2>
+          <div class="row">
+            <button class="secondary" onclick="exportSubscriptions('opml')">导出 OPML 文件</button>
+            <button class="secondary" onclick="exportSubscriptions('csv')">导出 CSV</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <section id="sec-settings" class="page-section">
+        <div>
+          <h1>系统设置</h1>
+          <p class="section-desc">导入导出数据、管理频率限制和黑名单策略。</p>
+        </div>
+
+        <div class="card">
+          <h2>请求频率控制</h2>
+          <p class="section-desc" style="margin-bottom: 12px;">为了避免触发微信的频繁验证，建议开启并配置限流。推荐值：单次间隔 10 秒，每分钟 6 次。</p>
+          <div class="row">
+            <label>每分钟请求上限 <input id="ratePerMinute" type="number" min="1" step="1" placeholder="6"></label>
+            <label>最小请求间隔 (秒) <input id="rateInterval" type="number" min="0" step="0.1" placeholder="10.0"></label>
+          </div>
+          <div class="row" style="margin-top: 16px;">
+            <button onclick="saveRateLimit()">保存限频配置</button>
+            <button class="secondary" onclick="applyRecommendedRateLimit()">恢复推荐值</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>黑名单管理</h2>
+          <p class="section-desc" style="margin-bottom: 12px;">加入黑名单的公众号将在自动轮询时被跳过。</p>
+          <div class="row" style="margin-bottom: 16px;">
+            <label>公众号 ID <input id="blacklistId" placeholder="Account ID"></label>
+            <label>原因 <input id="blacklistReason" placeholder="例如：高频触发验证码"></label>
+            <button onclick="addBlacklist()">加入黑名单</button>
+          </div>
+          <div id="blacklistList" class="grid-list"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Login Modal -->
+  <dialog id="loginDialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>扫码登录微信平台</h2>
+        <button class="close-btn" onclick="closeLoginDialog()">&times;</button>
+      </div>
+      <div id="qrBox" class="qr-container">
+        <span style="color: var(--text-muted);">正在创建登录会话...</span>
+      </div>
+      <p id="loginHint" style="text-align: center; color: var(--text-muted); font-size: 14px; margin: 0;"></p>
+      <p id="loginConfirmUrl" class="login-url"></p>
+      <div class="row" style="justify-content: center;">
+        <button id="openConfirmButton" class="secondary" onclick="openConfirmPage()" style="display: none;">打开确认页</button>
+        <button class="secondary" onclick="refreshLoginSession()">刷新二维码状态</button>
+        <button id="completeLoginButton" onclick="completeLogin()">我已手机扫码确认</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Toast Container -->
+  <div id="toast-container"></div></body>
+</html>

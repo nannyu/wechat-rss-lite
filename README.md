@@ -39,9 +39,19 @@ asyncio.run(main())
 
 ## Optional API
 
+Copy `.env.example` to `.env` and set `ADMIN_API_TOKEN` before using the admin UI.
+
 ```bash
 uvicorn wechat_rss_lite.api:create_app --factory --host 127.0.0.1 --port 8080
 ```
+
+### Security notes
+
+- Bind to `127.0.0.1` unless you intentionally expose the service on your LAN.
+- Set `ADMIN_API_TOKEN` in `.env`. Admin APIs accept `Authorization: Bearer <token>` or `?token=` (used by the article reader iframe).
+- Optionally set `RSS_READ_TOKEN` to require the same auth on `/feeds/*.rss`. When unset, feeds stay public (convenient for local dev). Subscription export and Admin “复制 RSS” URLs include `?token=` automatically when configured.
+- The image proxy (`/image`) stays public so RSS HTML and avatars can load in external readers.
+- Bulk article refresh is capped by `REFRESH_BATCH_LIMIT` (default `50`) to avoid hour-long HTTP requests.
 
 Endpoints:
 

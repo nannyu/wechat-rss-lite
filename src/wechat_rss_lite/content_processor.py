@@ -4,7 +4,7 @@ import html
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse
 
 from .models import Image
 
@@ -60,10 +60,13 @@ class _ImageExtractor(HTMLParser):
         if tag.lower() != "img":
             return
         values = {key.lower(): value or "" for key, value in attrs}
-        src = _image_source(values)
+        src = values.get("data-original-src") or _image_source(values)
         if not src:
             return
-        self.images.append(Image(url=urljoin(self.base_url, html.unescape(src)), alt=values.get("alt", "")))
+        decoded = html.unescape(src)
+        if decoded.startswith("/image?url="):
+            return
+        self.images.append(Image(url=urljoin(self.base_url, decoded), alt=values.get("alt", "")))
 
 
 def process_article_content(raw_html: str, url: str, *, image_proxy_base: str = "") -> ProcessedContent:
@@ -102,7 +105,7 @@ def process_article_content(raw_html: str, url: str, *, image_proxy_base: str = 
     text = html_to_text(content_html)
     images = tuple(extract_images(content_html, url))
 
-    if images and not text:
+    if images and not text and content_type == "rich_text":
         content_type = "image_only"
         text = f"[纯图片文章，共 {len(images)} 张图片]"
     elif content_type in {"audio_share", "audio_article"} and not text:
@@ -196,7 +199,51 @@ def html_to_text(content_html: str) -> str:
     return "\n".join(parser.parts)
 
 
+def _extract_div_inner(html: str, open_tag_pattern: str) -> str:
+    match = re.search(open_tag_pattern, html, re.DOTALL | re.IGNORECASE)
+    if not match:
+        return ""
+    start = match.end()
+    depth = 1
+    open_re = re.compile(r"<div[\s>/]", re.IGNORECASE)
+    close_re = re.compile(r"</div\s*>", re.IGNORECASE)
+    pos = start
+    while depth > 0 and pos < len(html):
+        next_open = open_re.search(html, pos)
+        next_close = close_re.search(html, pos)
+        if next_close is None:
+            break
+        if next_open and next_open.start() < next_close.start():
+            depth += 1
+            pos = next_open.end()
+        else:
+            depth -= 1
+            if depth == 0:
+                return html[start : next_close.start()].strip()
+            pos = next_close.end()
+    return html[start:].strip()
+
+
+def reader_body_from_html(content_html: str) -> str:
+    """Return the main article body for the reader UI (without WeChat chrome)."""
+    raw = (content_html or "").strip()
+    if not raw:
+        return ""
+    return _extract_article_body(raw)
+
+
 def _extract_article_body(raw_html: str) -> str:
+    patterns = (
+        r'<div[^>]*\bid=["\']js_content["\'][^>]*>',
+        r'<div[^>]*\bclass=["\'][^"\']*rich_media_content[^"\']*["\'][^>]*>',
+        r'<div[^>]*\bid=["\']page-content["\'][^>]*>',
+        r'<div[^>]*\bclass=["\'][^"\']*rich_media_area_primary_inner[^"\']*["\'][^>]*>',
+        r'<div[^>]*\bid=["\']js_article["\'][^>]*>',
+    )
+    for pattern in patterns:
+        content = _extract_div_inner(raw_html, pattern)
+        if content:
+            return content
     content = _find_marked_element(raw_html)
     if content:
         return content
@@ -210,9 +257,15 @@ def _extract_image_text(raw_html: str) -> str:
     content = _extract_article_body(raw_html)
     if extract_images(content, "https://mp.weixin.qq.com/"):
         return content
-    data_urls = re.findall(r"[\"'](https?://mmbiz\.qpic\.cn/[^\"']+)[\"']", raw_html)
+    data_urls = _extract_script_image_urls(raw_html)
     if data_urls:
-        imgs = "".join(f'<p><img data-src="{html.escape(url)}"></p>' for url in data_urls)
+        imgs = "".join(
+            '<p style="text-align:center;margin:0 0 6px">'
+            f'<img src="{html.escape(url)}" data-src="{html.escape(url)}" '
+            'style="max-width:100%;height:auto">'
+            "</p>"
+            for url in data_urls
+        )
         return f"<div>{imgs}</div>"
     return content
 
@@ -258,25 +311,218 @@ def _extract_audio_article(raw_html: str) -> str:
 
 
 def _normalize_article_html(content_html: str, base_url: str, *, image_proxy_base: str = "") -> str:
-    content_html = _DROP_BLOCK_RE.sub("", content_html)
+    content_html = re.sub(
+        r"<(script|noscript)\b[^>]*>.*?</\1>",
+        "",
+        content_html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
     content_html = re.sub(r"\son[a-z]+\s*=\s*(['\"]).*?\1", "", content_html, flags=re.IGNORECASE | re.DOTALL)
     content_html = _rewrite_image_tags(content_html, base_url, image_proxy_base=image_proxy_base)
-    return re.sub(r">\s+<", "><", re.sub(r"\s+", " ", content_html)).strip()
+    content_html = re.sub(r"\n\s*\n\s*\n+", "\n\n", content_html)
+    return content_html.strip()
+
+
+_WECHAT_IMAGE_HOST_MARKERS = ("mmbiz.qpic.cn", "mmbiz.qlogo.cn", "wx.qlogo.cn")
+
+
+def is_wechat_image_url(url: str) -> bool:
+    if not url or url.startswith("data:"):
+        return False
+    return any(marker in url for marker in _WECHAT_IMAGE_HOST_MARKERS)
+
+
+def image_proxy_endpoint(image_proxy_base: str) -> str:
+    base = (image_proxy_base or "").strip().rstrip("/")
+    if not base:
+        return "/image"
+    if base.startswith(("http://", "https://")):
+        parsed = urlparse(base)
+        return parsed.path or "/image"
+    if not base.startswith("/"):
+        return f"/{base}"
+    return base
+
+
+def proxy_image_url(url: str, image_proxy_base: str) -> str:
+    if not url:
+        return ""
+    decoded = html.unescape(url)
+    if not decoded or decoded.startswith("data:"):
+        return decoded
+    if "/image?url=" in decoded:
+        if decoded.startswith("/image?url="):
+            return decoded
+        if decoded.startswith(("http://", "https://")):
+            marker = "/image?url="
+            idx = decoded.find(marker)
+            if idx >= 0:
+                return decoded[idx:]
+        return decoded
+    if is_wechat_image_url(decoded):
+        endpoint = image_proxy_endpoint(image_proxy_base)
+        relative = f"{endpoint}?url={quote(decoded, safe='')}"
+        if image_proxy_base.startswith(("http://", "https://")):
+            parsed = urlparse(image_proxy_base)
+            return f"{parsed.scheme}://{parsed.netloc}{relative}"
+        return relative
+    return decoded
+
+
+def normalize_content_image_proxy_urls(content_html: str) -> str:
+    if not content_html.strip():
+        return content_html
+    return re.sub(
+        r"https?://[^/\"'\s]+(/image\?url=[^\"'\s>]+)",
+        r"\1",
+        content_html,
+        flags=re.IGNORECASE,
+    )
+
+
+def proxy_content_images(content_html: str, image_proxy_base: str) -> str:
+    if not image_proxy_base or not content_html.strip():
+        return content_html
+
+    def replace_img_tag(match: re.Match[str]) -> str:
+        img_html = match.group(0)
+        data_src_match = re.search(r'data-src=(["\'])(.*?)\1', img_html, re.IGNORECASE | re.DOTALL)
+        src_match = re.search(r'\ssrc=(["\'])(.*?)\1', img_html, re.IGNORECASE | re.DOTALL)
+        original_url = None
+        if data_src_match:
+            original_url = data_src_match.group(2)
+        elif src_match:
+            original_url = src_match.group(2)
+        if not original_url or not is_wechat_image_url(original_url):
+            return img_html
+        proxy_url = proxy_image_url(original_url, image_proxy_base)
+        absolute = html.unescape(original_url)
+        if not absolute.startswith(("http://", "https://")):
+            absolute = urljoin("https://mp.weixin.qq.com/", absolute)
+        new_html = img_html
+        if data_src_match:
+            new_html = re.sub(
+                r'data-src=(["\']).*?\1',
+                f'data-src="{proxy_url}"',
+                new_html,
+                count=1,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+        if src_match:
+            new_html = re.sub(
+                r'\ssrc=(["\']).*?\1',
+                f' src="{proxy_url}"',
+                new_html,
+                count=1,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+        else:
+            new_html = new_html.replace("<img", f'<img src="{proxy_url}"', 1)
+            if "src=" not in new_html:
+                new_html = new_html.replace("<IMG", f'<IMG src="{proxy_url}"', 1)
+        if "data-original-src" not in new_html.lower():
+            new_html = _set_attr(new_html, "data-original-src", absolute)
+        return new_html
+
+    return re.sub(r"<img\b[^>]*>", replace_img_tag, content_html, flags=re.IGNORECASE | re.DOTALL)
 
 
 def _rewrite_image_tags(content_html: str, base_url: str, *, image_proxy_base: str) -> str:
+    if image_proxy_base:
+        return proxy_content_images(content_html, image_proxy_base)
     def replace(match: re.Match[str]) -> str:
         tag = match.group(0)
         attrs = _parse_attrs(tag)
         src = _image_source(attrs)
         if not src:
             return tag
-        absolute = urljoin(base_url, html.unescape(src))
-        rendered = f"{image_proxy_base}?url={quote(absolute, safe='')}" if image_proxy_base else absolute
-        alt = attrs.get("alt", "")
-        return f'<img src="{html.escape(rendered)}" data-original-src="{html.escape(absolute)}" alt="{html.escape(alt)}">'
+        decoded = html.unescape(src)
+        if decoded.startswith("data:") or "/image?url=" in decoded:
+            return tag
+        absolute = urljoin(base_url, decoded)
+        rewritten = _set_attr(tag, "src", absolute)
+        if "data-src" in attrs:
+            rewritten = _set_attr(rewritten, "data-src", absolute)
+        else:
+            rewritten = _set_attr(rewritten, "data-src", absolute)
+        rewritten = _set_attr(rewritten, "data-original-src", absolute)
+        return rewritten
 
     return re.sub(r"<img\b[^>]*>", replace, content_html, flags=re.IGNORECASE | re.DOTALL)
+
+
+def _extract_script_image_urls(raw_html: str) -> list[str]:
+    images: list[str] = []
+    simple_list_pos = raw_html.find("picture_page_info_list")
+    if simple_list_pos >= 0:
+        bracket_start = raw_html.find("[", simple_list_pos)
+        if bracket_start >= 0:
+            depth = 0
+            bracket_end = bracket_start
+            for bracket_end in range(bracket_start, min(bracket_start + 40000, len(raw_html))):
+                char = raw_html[bracket_end]
+                if char == "[":
+                    depth += 1
+                elif char == "]":
+                    depth -= 1
+                    if depth == 0:
+                        break
+            block = raw_html[bracket_start : bracket_end + 1]
+            for item in _top_level_objects(block):
+                match = re.search(
+                    r"cdn_url\s*:\s*(?:JsDecode\()?['\"](?P<url>https?://[^'\"]+)['\"]\)?",
+                    item,
+                )
+                if match:
+                    _append_image_url(images, _decode_wechat_js(match.group("url")))
+    if not images:
+        for match in re.finditer(r"[\"'](?P<url>https?://(?:mmbiz\.qpic\.cn|mmbiz\.qlogo\.cn|wx\.qlogo\.cn)/[^\"']+)[\"']", raw_html):
+            _append_image_url(images, _decode_wechat_js(match.group("url")))
+    return images
+
+
+def _top_level_objects(array_source: str) -> list[str]:
+    objects: list[str] = []
+    depth = 0
+    start = -1
+    quote: str | None = None
+    escape = False
+    for index, char in enumerate(array_source):
+        if quote:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                objects.append(array_source[start : index + 1])
+                start = -1
+    return objects
+
+
+def _append_image_url(images: list[str], url: str) -> None:
+    if url.startswith("data:"):
+        return
+    if not any(host in url for host in ("mmbiz.qpic.cn", "mmbiz.qlogo.cn", "wx.qlogo.cn")):
+        return
+    if url not in images:
+        images.append(url)
+
+
+def _decode_wechat_js(value: str) -> str:
+    value = re.sub(r"\\x([0-9a-fA-F]{2})", lambda match: chr(int(match.group(1), 16)), value)
+    return html.unescape(html.unescape(value))
 
 
 def _find_marked_element(raw_html: str) -> str:
@@ -333,6 +579,17 @@ def _parse_attrs(tag: str) -> dict[str, str]:
             re.DOTALL,
         )
     }
+
+
+def _set_attr(tag: str, name: str, value: str) -> str:
+    escaped = html.escape(value, quote=True)
+    pattern = rf"(?P<prefix>\s{re.escape(name)}\s*=\s*)(?P<quote>['\"])(?P<value>.*?)(?P=quote)"
+    if re.search(pattern, tag, flags=re.IGNORECASE | re.DOTALL):
+        return re.sub(pattern, rf'\g<prefix>"{escaped}"', tag, count=1, flags=re.IGNORECASE | re.DOTALL)
+    insert_at = tag.rfind("/>") if tag.rstrip().endswith("/>") else tag.rfind(">")
+    if insert_at < 0:
+        return tag
+    return f'{tag[:insert_at]} {name}="{escaped}"{tag[insert_at:]}'
 
 
 def _attr(attrs: str, name: str) -> str:

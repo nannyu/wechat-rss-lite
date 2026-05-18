@@ -26,6 +26,10 @@ class ProxyPool:
         with self._lock:
             return ProxyChoice(next(self._cycle))
 
+    @property
+    def count(self) -> int:
+        return len(self.urls)
+
     def status(self) -> dict[str, object]:
         return {"enabled": bool(self.urls), "size": len(self.urls)}
 

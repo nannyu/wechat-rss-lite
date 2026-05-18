@@ -71,6 +71,7 @@ class LoginSession:
     qrcode_url: str
     status: LoginStatus = LoginStatus.PENDING
     message: str = ""
+    confirm_url: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime | None = None
 
