@@ -45,6 +45,9 @@ class AccountProvider(Protocol):
     ) -> list[ArticleSummary]:
         ...
 
+    async def account_info(self, account_id: str) -> dict:
+        ...
+
 
 class LoginProvider(Protocol):
     """Host-project adapter for QR-code login.
@@ -76,6 +79,9 @@ class EmptyAccountProvider:
         keyword: str = "",
     ) -> list[ArticleSummary]:
         return []
+
+    async def account_info(self, account_id: str) -> dict:
+        return {"id": account_id, "available": False}
 
 
 class ManualLoginProvider:

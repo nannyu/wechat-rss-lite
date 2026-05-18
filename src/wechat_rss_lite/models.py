@@ -22,6 +22,8 @@ class Article:
     text: str = ""
     content_type: str = "rich_text"
     unavailable_reason: str = ""
+    status: str = "fetched"
+    source: str = "poll"
     published_at: datetime | None = None
     images: tuple[Image, ...] = field(default_factory=tuple)
 
@@ -36,9 +38,22 @@ class Subscription:
     title: str
     account_id: str = ""
     source_url: str = ""
+    avatar_url: str = ""
+    description: str = ""
+    category_id: int | None = None
     enabled: bool = True
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass(frozen=True)
+class Category:
+    id: int | None = None
+    name: str = ""
+    description: str = ""
+    color: str = "blue"
+    sort_order: int = 0
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class LoginStatus(str, Enum):
@@ -47,6 +62,7 @@ class LoginStatus(str, Enum):
     CONFIRMED = "confirmed"
     EXPIRED = "expired"
     FAILED = "failed"
+    UNCONFIGURED = "unconfigured"
 
 
 @dataclass(frozen=True)
@@ -95,4 +111,23 @@ class NotificationEvent:
     kind: str
     message: str
     target: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass(frozen=True)
+class VerificationChallenge:
+    id: str
+    kind: str = "manual"
+    target: str = ""
+    verify_url: str = ""
+    status: str = "pending"
+    message: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    resolved_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class BlacklistEntry:
+    account_id: str
+    reason: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import Article, Credential, PollResult, Subscription
+from .models import Article, BlacklistEntry, Category, Credential, PollResult, Subscription, VerificationChallenge
 
 
 class SQLiteRepository:
@@ -17,12 +17,18 @@ class SQLiteRepository:
         with self._connect() as conn:
             conn.execute(
                 """
-                insert into subscriptions (id, title, account_id, source_url, enabled, created_at, updated_at)
-                values (?, ?, ?, ?, ?, ?, ?)
+                insert into subscriptions (
+                    id, title, account_id, source_url, avatar_url, description,
+                    category_id, enabled, created_at, updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(id) do update set
                     title = excluded.title,
                     account_id = excluded.account_id,
                     source_url = excluded.source_url,
+                    avatar_url = coalesce(nullif(excluded.avatar_url, ''), avatar_url),
+                    description = coalesce(nullif(excluded.description, ''), description),
+                    category_id = excluded.category_id,
                     enabled = excluded.enabled,
                     updated_at = excluded.updated_at
                 """,
@@ -31,6 +37,9 @@ class SQLiteRepository:
                     subscription.title,
                     subscription.account_id or subscription.id,
                     subscription.source_url,
+                    subscription.avatar_url,
+                    subscription.description,
+                    subscription.category_id,
                     1 if subscription.enabled else 0,
                     _dt(subscription.created_at),
                     _dt(datetime.now(timezone.utc)),
@@ -40,7 +49,12 @@ class SQLiteRepository:
     def list_subscriptions(self) -> list[Subscription]:
         with self._connect() as conn:
             rows = conn.execute(
-                "select id, title, source_url, created_at, updated_at from subscriptions order by title"
+                """
+                select id, title, account_id, source_url, avatar_url, description, category_id,
+                       enabled, created_at, updated_at
+                from subscriptions
+                order by title
+                """
             ).fetchall()
         return [
             Subscription(
@@ -48,6 +62,9 @@ class SQLiteRepository:
                 title=row["title"],
                 account_id=row["account_id"] if "account_id" in row.keys() else row["id"],
                 source_url=row["source_url"],
+                avatar_url=row["avatar_url"] if "avatar_url" in row.keys() else "",
+                description=row["description"] if "description" in row.keys() else "",
+                category_id=row["category_id"] if "category_id" in row.keys() else None,
                 enabled=bool(row["enabled"]) if "enabled" in row.keys() else True,
                 created_at=_parse_dt(row["created_at"]),
                 updated_at=_parse_dt(row["updated_at"]),
@@ -59,15 +76,32 @@ class SQLiteRepository:
         with self._connect() as conn:
             conn.execute("delete from subscriptions where id = ?", (subscription_id,))
 
-    def save_article(self, article: Article, subscription_id: str | None = None) -> None:
+    def set_subscription_enabled(self, subscription_id: str, enabled: bool) -> Subscription | None:
+        with self._connect() as conn:
+            conn.execute(
+                "update subscriptions set enabled = ?, updated_at = ? where id = ?",
+                (1 if enabled else 0, _dt(datetime.now(timezone.utc)), subscription_id),
+            )
+        return next((item for item in self.list_subscriptions() if item.id == subscription_id), None)
+
+    def set_subscription_category(self, subscription_id: str, category_id: int | None) -> Subscription | None:
+        with self._connect() as conn:
+            conn.execute(
+                "update subscriptions set category_id = ?, updated_at = ? where id = ?",
+                (category_id, _dt(datetime.now(timezone.utc)), subscription_id),
+            )
+        return next((item for item in self.list_subscriptions() if item.id == subscription_id), None)
+
+    def save_article(self, article: Article, subscription_id: str | None = None, *, source: str | None = None) -> None:
+        article_source = source or article.source or "poll"
         with self._connect() as conn:
             conn.execute(
                 """
                 insert into articles (
                     url, subscription_id, title, author, account_name, summary,
-                    content_html, text, content_type, unavailable_reason, published_at, fetched_at
+                    content_html, text, content_type, unavailable_reason, status, source, published_at, fetched_at
                 )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(url) do update set
                     subscription_id = excluded.subscription_id,
                     title = excluded.title,
@@ -78,6 +112,8 @@ class SQLiteRepository:
                     text = excluded.text,
                     content_type = excluded.content_type,
                     unavailable_reason = excluded.unavailable_reason,
+                    status = excluded.status,
+                    source = excluded.source,
                     published_at = excluded.published_at,
                     fetched_at = excluded.fetched_at
                 """,
@@ -92,30 +128,99 @@ class SQLiteRepository:
                     article.text,
                     article.content_type,
                     article.unavailable_reason,
+                    article.status,
+                    article_source,
                     _dt(article.published_at) if article.published_at else None,
                     _dt(datetime.now(timezone.utc)),
                 ),
             )
 
-    def recent_articles(self, subscription_id: str | None = None, limit: int = 20) -> list[Article]:
-        params: tuple[object, ...]
-        where = ""
+    def mark_article_pending(
+        self,
+        *,
+        url: str,
+        title: str,
+        subscription_id: str,
+        summary: str = "",
+        source: str = "poll",
+        published_at: datetime | None = None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into articles (
+                    url, subscription_id, title, summary, content_type, status, source, published_at, fetched_at
+                )
+                values (?, ?, ?, ?, 'pending', 'pending', ?, ?, ?)
+                on conflict(url) do update set
+                    subscription_id = excluded.subscription_id,
+                    title = coalesce(nullif(excluded.title, ''), title),
+                    summary = coalesce(nullif(excluded.summary, ''), summary),
+                    status = case
+                        when articles.status in ('fetched', 'permanent_fail') then articles.status
+                        else 'pending'
+                    end,
+                    source = excluded.source,
+                    published_at = coalesce(excluded.published_at, articles.published_at),
+                    fetched_at = excluded.fetched_at
+                """,
+                (
+                    url,
+                    subscription_id,
+                    title,
+                    summary,
+                    source,
+                    _dt(published_at) if published_at else None,
+                    _dt(datetime.now(timezone.utc)),
+                ),
+            )
+
+    def mark_article_failed(self, *, url: str, error: str = "", status: str = "failed") -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                update articles
+                set status = ?, unavailable_reason = ?, fetched_at = ?
+                where url = ?
+                """,
+                (status, error[:500], _dt(datetime.now(timezone.utc)), url),
+            )
+
+    def recent_articles(
+        self,
+        subscription_id: str | None = None,
+        limit: int = 20,
+        *,
+        source: str | None = None,
+        category_id: int | None = None,
+    ) -> list[Article]:
+        conditions: list[str] = []
+        params_list: list[object] = []
         if subscription_id:
-            where = "where subscription_id = ?"
-            params = (subscription_id, limit)
-        else:
-            params = (limit,)
+            conditions.append("a.subscription_id = ?")
+            params_list.append(subscription_id)
+        if source:
+            conditions.append("a.source = ?")
+            params_list.append(source)
+        join = ""
+        if category_id is not None:
+            join = "join subscriptions s on s.id = a.subscription_id"
+            conditions.append("s.category_id = ?")
+            params_list.append(category_id)
+        where = f"where {' and '.join(conditions)}" if conditions else ""
+        params_list.append(limit)
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
-                select url, title, author, account_name, summary, content_html, text,
-                       content_type, unavailable_reason, published_at
-                from articles
+                select a.url, a.title, a.author, a.account_name, a.summary, a.content_html, a.text,
+                       a.content_type, a.unavailable_reason, a.status, a.source, a.published_at
+                from articles a
+                {join}
                 {where}
-                order by coalesce(published_at, fetched_at) desc
+                order by coalesce(a.published_at, a.fetched_at) desc
                 limit ?
                 """,
-                params,
+                tuple(params_list),
             ).fetchall()
         return [
             Article(
@@ -128,10 +233,132 @@ class SQLiteRepository:
                 text=row["text"] or "",
                 content_type=row["content_type"] or "rich_text",
                 unavailable_reason=row["unavailable_reason"] or "",
+                status=row["status"] if "status" in row.keys() else _status_from_content_type(row["content_type"] or "rich_text"),
+                source=row["source"] if "source" in row.keys() else "poll",
                 published_at=_parse_dt(row["published_at"]) if row["published_at"] else None,
             )
             for row in rows
         ]
+
+    def increment_verification_count(
+        self,
+        account_id: str,
+        *,
+        reason: str = "verification_required",
+        threshold: int = 3,
+    ) -> int:
+        now = datetime.now(timezone.utc)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into verification_counts (account_id, count, last_reason, updated_at)
+                values (?, 1, ?, ?)
+                on conflict(account_id) do update set
+                    count = count + 1,
+                    last_reason = excluded.last_reason,
+                    updated_at = excluded.updated_at
+                """,
+                (account_id, reason, _dt(now)),
+            )
+            row = conn.execute(
+                "select count from verification_counts where account_id = ?",
+                (account_id,),
+            ).fetchone()
+            count = int(row["count"] or 0)
+            if threshold > 0 and count >= threshold:
+                conn.execute(
+                    """
+                    insert into blacklist (account_id, reason, created_at)
+                    values (?, ?, ?)
+                    on conflict(account_id) do update set reason = excluded.reason
+                    """,
+                    (account_id, f"自动加入黑名单：连续触发验证 {count} 次", _dt(now)),
+                )
+        return count
+
+    def verification_count(self, account_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "select count from verification_counts where account_id = ?",
+                (account_id,),
+            ).fetchone()
+        return int(row["count"] or 0) if row else 0
+
+    def create_category(self, category: Category) -> Category:
+        with self._connect() as conn:
+            if category.sort_order:
+                sort_order = category.sort_order
+            else:
+                row = conn.execute("select coalesce(max(sort_order), 0) as max_order from categories").fetchone()
+                sort_order = int(row["max_order"] or 0) + 1
+            cursor = conn.execute(
+                """
+                insert into categories (name, description, color, sort_order, created_at)
+                values (?, ?, ?, ?, ?)
+                """,
+                (
+                    category.name,
+                    category.description,
+                    category.color,
+                    sort_order,
+                    _dt(category.created_at),
+                ),
+            )
+            category_id = int(cursor.lastrowid)
+        return Category(
+            id=category_id,
+            name=category.name,
+            description=category.description,
+            color=category.color,
+            sort_order=sort_order,
+            created_at=category.created_at,
+        )
+
+    def list_categories(self) -> list[Category]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select id, name, description, color, sort_order, created_at
+                from categories
+                order by sort_order, name
+                """
+            ).fetchall()
+        return [
+            Category(
+                id=row["id"],
+                name=row["name"],
+                description=row["description"] or "",
+                color=row["color"] or "blue",
+                sort_order=row["sort_order"] or 0,
+                created_at=_parse_dt(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def update_category(self, category_id: int, *, name: str | None = None, description: str | None = None, color: str | None = None) -> Category | None:
+        current = next((item for item in self.list_categories() if item.id == category_id), None)
+        if not current:
+            return None
+        with self._connect() as conn:
+            conn.execute(
+                """
+                update categories
+                set name = ?, description = ?, color = ?
+                where id = ?
+                """,
+                (
+                    name if name is not None else current.name,
+                    description if description is not None else current.description,
+                    color if color is not None else current.color,
+                    category_id,
+                ),
+            )
+        return next((item for item in self.list_categories() if item.id == category_id), None)
+
+    def delete_category(self, category_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute("update subscriptions set category_id = null where category_id = ?", (category_id,))
+            conn.execute("delete from categories where id = ?", (category_id,))
 
     def save_credential(self, credential: Credential) -> None:
         with self._connect() as conn:
@@ -223,6 +450,119 @@ class SQLiteRepository:
             for row in rows
         ]
 
+    def add_verification_challenge(self, challenge: VerificationChallenge) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into verification_challenges (
+                    id, kind, target, verify_url, status, message, created_at, resolved_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(id) do update set
+                    kind = excluded.kind,
+                    target = excluded.target,
+                    verify_url = excluded.verify_url,
+                    status = excluded.status,
+                    message = excluded.message,
+                    resolved_at = excluded.resolved_at
+                """,
+                (
+                    challenge.id,
+                    challenge.kind,
+                    challenge.target,
+                    challenge.verify_url,
+                    challenge.status,
+                    challenge.message,
+                    _dt(challenge.created_at),
+                    _dt(challenge.resolved_at) if challenge.resolved_at else None,
+                ),
+            )
+
+    def list_verification_challenges(self, *, status: str | None = None, limit: int = 50) -> list[VerificationChallenge]:
+        where = ""
+        params: tuple[object, ...]
+        if status:
+            where = "where status = ?"
+            params = (status, limit)
+        else:
+            params = (limit,)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                select id, kind, target, verify_url, status, message, created_at, resolved_at
+                from verification_challenges
+                {where}
+                order by created_at desc
+                limit ?
+                """,
+                params,
+            ).fetchall()
+        return [
+            VerificationChallenge(
+                id=row["id"],
+                kind=row["kind"],
+                target=row["target"] or "",
+                verify_url=row["verify_url"] or "",
+                status=row["status"],
+                message=row["message"] or "",
+                created_at=_parse_dt(row["created_at"]),
+                resolved_at=_parse_dt(row["resolved_at"]) if row["resolved_at"] else None,
+            )
+            for row in rows
+        ]
+
+    def resolve_verification_challenge(self, challenge_id: str) -> VerificationChallenge | None:
+        resolved_at = datetime.now(timezone.utc)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                update verification_challenges
+                set status = 'resolved', resolved_at = ?
+                where id = ?
+                """,
+                (_dt(resolved_at), challenge_id),
+            )
+        matches = [item for item in self.list_verification_challenges(limit=100) if item.id == challenge_id]
+        return matches[0] if matches else None
+
+    def add_blacklist_entry(self, entry: BlacklistEntry) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into blacklist (account_id, reason, created_at)
+                values (?, ?, ?)
+                on conflict(account_id) do update set
+                    reason = excluded.reason
+                """,
+                (entry.account_id, entry.reason, _dt(entry.created_at)),
+            )
+
+    def remove_blacklist_entry(self, account_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("delete from blacklist where account_id = ?", (account_id,))
+
+    def list_blacklist(self) -> list[BlacklistEntry]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "select account_id, reason, created_at from blacklist order by created_at desc"
+            ).fetchall()
+        return [
+            BlacklistEntry(
+                account_id=row["account_id"],
+                reason=row["reason"] or "",
+                created_at=_parse_dt(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def is_blacklisted(self, account_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "select 1 from blacklist where account_id = ?",
+                (account_id,),
+            ).fetchone()
+        return row is not None
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
@@ -238,9 +578,21 @@ class SQLiteRepository:
                     title text not null,
                     account_id text not null default '',
                     source_url text not null default '',
+                    avatar_url text not null default '',
+                    description text not null default '',
+                    category_id integer,
                     enabled integer not null default 1,
                     created_at text not null,
                     updated_at text not null
+                );
+
+                create table if not exists categories (
+                    id integer primary key autoincrement,
+                    name text not null unique,
+                    description text not null default '',
+                    color text not null default 'blue',
+                    sort_order integer not null default 0,
+                    created_at text not null
                 );
 
                 create table if not exists articles (
@@ -254,6 +606,8 @@ class SQLiteRepository:
                     text text,
                     content_type text not null default 'rich_text',
                     unavailable_reason text not null default '',
+                    status text not null default 'fetched',
+                    source text not null default 'poll',
                     published_at text,
                     fetched_at text not null
                 );
@@ -279,14 +633,43 @@ class SQLiteRepository:
                     finished_at text not null
                 );
 
+                create table if not exists verification_challenges (
+                    id text primary key,
+                    kind text not null,
+                    target text not null default '',
+                    verify_url text not null default '',
+                    status text not null default 'pending',
+                    message text not null default '',
+                    created_at text not null,
+                    resolved_at text
+                );
+
+                create table if not exists blacklist (
+                    account_id text primary key,
+                    reason text not null default '',
+                    created_at text not null
+                );
+
+                create table if not exists verification_counts (
+                    account_id text primary key,
+                    count integer not null default 0,
+                    last_reason text not null default '',
+                    updated_at text not null
+                );
+
                 create index if not exists idx_articles_subscription
                     on articles(subscription_id, published_at desc);
                 """
             )
             _ensure_column(conn, "subscriptions", "account_id", "text not null default ''")
+            _ensure_column(conn, "subscriptions", "avatar_url", "text not null default ''")
+            _ensure_column(conn, "subscriptions", "description", "text not null default ''")
+            _ensure_column(conn, "subscriptions", "category_id", "integer")
             _ensure_column(conn, "subscriptions", "enabled", "integer not null default 1")
             _ensure_column(conn, "articles", "content_type", "text not null default 'rich_text'")
             _ensure_column(conn, "articles", "unavailable_reason", "text not null default ''")
+            _ensure_column(conn, "articles", "status", "text not null default 'fetched'")
+            _ensure_column(conn, "articles", "source", "text not null default 'poll'")
 
 
 def _dt(value: datetime) -> str:
@@ -303,3 +686,13 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     columns = {row["name"] for row in conn.execute(f"pragma table_info({table})").fetchall()}
     if column not in columns:
         conn.execute(f"alter table {table} add column {column} {definition}")
+
+
+def _status_from_content_type(content_type: str) -> str:
+    if content_type == "verification_required":
+        return "verification_required"
+    if content_type == "unavailable":
+        return "permanent_fail"
+    if content_type == "pending":
+        return "pending"
+    return "fetched"

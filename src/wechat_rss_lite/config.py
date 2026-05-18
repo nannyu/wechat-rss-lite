@@ -12,12 +12,22 @@ class Settings:
     poll_interval_seconds: int = 3600
     request_timeout_seconds: float = 15.0
     request_retries: int = 2
-    rate_limit_per_minute: int = 30
-    article_interval_seconds: float = 1.0
+    rate_limit_per_minute: int = 6
+    article_interval_seconds: float = 10.0
     proxy_urls: tuple[str, ...] = ()
     webhook_url: str = ""
     admin_token: str = ""
-    allowed_image_hosts: tuple[str, ...] = ("mmbiz.qpic.cn", "mmbiz.qlogo.cn", "mp.weixin.qq.com")
+    login_provider: str = "wechat"
+    background_polling: bool = False
+    credential_reminders: bool = False
+    verification_blacklist_threshold: int = 3
+    allowed_image_hosts: tuple[str, ...] = (
+        "mmbiz.qpic.cn",
+        "mmbiz.qlogo.cn",
+        "mp.weixin.qq.com",
+        "wx.qlogo.cn",
+        "res.wx.qq.com",
+    )
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -27,13 +37,17 @@ class Settings:
             poll_interval_seconds=_int("RSS_POLL_INTERVAL", 3600),
             request_timeout_seconds=_float("REQUEST_TIMEOUT_SECONDS", 15.0),
             request_retries=_int("REQUEST_RETRIES", 2),
-            rate_limit_per_minute=_int("RATE_LIMIT_PER_MINUTE", 30),
-            article_interval_seconds=_float("ARTICLE_INTERVAL_SECONDS", 1.0),
+            rate_limit_per_minute=_int("RATE_LIMIT_PER_MINUTE", 6),
+            article_interval_seconds=_float("ARTICLE_INTERVAL_SECONDS", 10.0),
             proxy_urls=_csv("PROXY_URLS"),
             webhook_url=os.getenv("WEBHOOK_URL", ""),
             admin_token=os.getenv("ADMIN_API_TOKEN", ""),
+            login_provider=os.getenv("LOGIN_PROVIDER", "wechat"),
+            background_polling=_bool("BACKGROUND_POLLING", False),
+            credential_reminders=_bool("CREDENTIAL_REMINDERS", False),
+            verification_blacklist_threshold=_int("VERIFICATION_BLACKLIST_THRESHOLD", 3),
             allowed_image_hosts=_csv("ALLOWED_IMAGE_HOSTS")
-            or ("mmbiz.qpic.cn", "mmbiz.qlogo.cn", "mp.weixin.qq.com"),
+            or ("mmbiz.qpic.cn", "mmbiz.qlogo.cn", "mp.weixin.qq.com", "wx.qlogo.cn", "res.wx.qq.com"),
         )
 
 
@@ -54,3 +68,9 @@ def _float(name: str, default: float) -> float:
     except ValueError:
         return default
 
+
+def _bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}

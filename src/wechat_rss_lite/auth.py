@@ -43,6 +43,12 @@ class AuthManager:
         self.repository.save_credential(credential)
         return credential
 
+    async def confirm_login_session(self, session_id: str) -> LoginSession:
+        confirm = getattr(self.login_provider, "confirm_session", None)
+        if not confirm:
+            raise RuntimeError("Login provider does not support confirmation pages")
+        return await confirm(session_id)
+
     async def check_expiry(self, credential_id: str = "default") -> NotificationEvent | None:
         credential = self.repository.get_credential(credential_id)
         if not credential or not credential.expires_at:
@@ -56,4 +62,3 @@ class AuthManager:
             return None
         await self.notifier.send(event)
         return event
-
