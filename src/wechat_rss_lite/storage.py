@@ -803,7 +803,7 @@ class PostgresRepository(SQLiteRepository):
         wrapper = _PostgresConnection(conn, self.schema)
         try:
             conn.execute(f'create schema if not exists "{self.schema}"')
-            wrapper.execute(f'set search_path to "{self.schema}"')
+            wrapper.execute(f'set local search_path to "{self.schema}"')
             yield wrapper
             conn.commit()
         except Exception:
