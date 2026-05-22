@@ -7,6 +7,7 @@ import httpx
 
 from .adapters import AccountProfile, ArticleSummary
 from .models import Credential
+from .rate_limit import AsyncRateLimiter
 from .storage import SQLiteRepository
 
 
@@ -14,15 +15,24 @@ MP_BASE_URL = "https://mp.weixin.qq.com"
 
 
 class WeChatMpAccountProvider:
-    def __init__(self, *, repository: SQLiteRepository, timeout: float = 15.0) -> None:
+    def __init__(
+        self,
+        *,
+        repository: SQLiteRepository,
+        timeout: float = 15.0,
+        rate_limiter: AsyncRateLimiter | None = None,
+    ) -> None:
         self.repository = repository
         self.timeout = timeout
+        self.rate_limiter = rate_limiter
 
     async def search_accounts(self, query: str, *, limit: int = 10) -> list[AccountProfile]:
         credential = self._credential()
         if not credential:
             return []
         async with httpx.AsyncClient(timeout=self.timeout) as client:
+            if self.rate_limiter:
+                await self.rate_limiter.wait()
             response = await client.get(
                 f"{MP_BASE_URL}/cgi-bin/searchbiz",
                 params={
@@ -85,6 +95,8 @@ class WeChatMpAccountProvider:
             "ajax": 1,
         }
         async with httpx.AsyncClient(timeout=self.timeout) as client:
+            if self.rate_limiter:
+                await self.rate_limiter.wait()
             response = await client.get(
                 f"{MP_BASE_URL}/cgi-bin/appmsgpublish",
                 params=params,
@@ -118,6 +130,8 @@ class WeChatMpAccountProvider:
         if not credential:
             return {"id": account_id, "available": False, "error": "not_logged_in"}
         async with httpx.AsyncClient(timeout=self.timeout) as client:
+            if self.rate_limiter:
+                await self.rate_limiter.wait()
             response = await client.get(
                 f"{MP_BASE_URL}/mp/authorinfo",
                 params={

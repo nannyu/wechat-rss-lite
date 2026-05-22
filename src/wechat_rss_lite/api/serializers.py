@@ -15,7 +15,16 @@ from ..content_processor import (
     proxy_content_images,
     proxy_image_url,
 )
-from ..models import Article, BlacklistEntry, Category, Credential, NotificationEvent, Subscription, VerificationChallenge
+from ..models import (
+    Article,
+    BackgroundJob,
+    BlacklistEntry,
+    Category,
+    Credential,
+    NotificationEvent,
+    Subscription,
+    VerificationChallenge,
+)
 from ..storage import SQLiteRepository
 from ..webhook import WebhookNotifier
 
@@ -155,6 +164,25 @@ def poll_result_to_dict(result: Any) -> dict[str, Any]:
         "message": result.message,
         "started_at": result.started_at.isoformat(),
         "finished_at": result.finished_at.isoformat(),
+    }
+
+
+def background_job_to_dict(job: BackgroundJob) -> dict[str, Any]:
+    return {
+        "id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "target": job.target,
+        "total": job.total,
+        "processed": job.processed,
+        "succeeded": job.succeeded,
+        "failed": job.failed,
+        "message": job.message,
+        "result": job.result,
+        "error": job.error,
+        "created_at": job.created_at.isoformat(),
+        "updated_at": job.updated_at.isoformat(),
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
     }
 
 

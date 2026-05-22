@@ -29,3 +29,23 @@ def test_build_reader_html_includes_images() -> None:
     )
     assert "/image?url=" in page
     assert "<img" in page
+
+
+def test_build_reader_html_rebases_proxy_images() -> None:
+    page = _build_reader_html(
+        {
+            "title": "Demo",
+            "url": "https://mp.weixin.qq.com/s/demo",
+            "content_html": (
+                '<div id="js_content">'
+                '<img src="/image?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fx.jpg" '
+                'data-src="/image?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fx.jpg">'
+                "</div>"
+            ),
+            "text": "",
+        },
+        image_proxy_base="https://example.com/_/wechat-rss-lite/image",
+    )
+
+    assert 'src="https://example.com/_/wechat-rss-lite/image?url=' in page
+    assert 'data-src="https://example.com/_/wechat-rss-lite/image?url=' in page

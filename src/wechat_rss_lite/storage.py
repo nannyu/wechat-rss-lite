@@ -2,12 +2,24 @@ from __future__ import annotations
 
 import sqlite3
 import json
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from .models import Article, BlacklistEntry, Category, Credential, PollResult, Subscription, VerificationChallenge
+from .models import (
+    Article,
+    BackgroundJob,
+    BlacklistEntry,
+    Category,
+    Credential,
+    LoginSession,
+    LoginStatus,
+    PollResult,
+    Subscription,
+    VerificationChallenge,
+)
 
 
 def create_repository(settings: Any) -> "SQLiteRepository":
@@ -35,8 +47,8 @@ class SQLiteRepository:
                     title = excluded.title,
                     account_id = excluded.account_id,
                     source_url = excluded.source_url,
-                    avatar_url = coalesce(nullif(excluded.avatar_url, ''), avatar_url),
-                    description = coalesce(nullif(excluded.description, ''), description),
+                    avatar_url = coalesce(nullif(excluded.avatar_url, ''), subscriptions.avatar_url),
+                    description = coalesce(nullif(excluded.description, ''), subscriptions.description),
                     category_id = excluded.category_id,
                     enabled = excluded.enabled,
                     updated_at = excluded.updated_at
@@ -151,7 +163,7 @@ class SQLiteRepository:
                     unavailable_reason = excluded.unavailable_reason,
                     status = excluded.status,
                     source = excluded.source,
-                    published_at = excluded.published_at,
+                    published_at = coalesce(excluded.published_at, articles.published_at),
                     fetched_at = excluded.fetched_at
                 """,
                 (
@@ -191,8 +203,8 @@ class SQLiteRepository:
                 values (?, ?, ?, ?, 'pending', 'pending', ?, ?, ?)
                 on conflict(url) do update set
                     subscription_id = excluded.subscription_id,
-                    title = coalesce(nullif(excluded.title, ''), title),
-                    summary = coalesce(nullif(excluded.summary, ''), summary),
+                    title = coalesce(nullif(excluded.title, ''), articles.title),
+                    summary = coalesce(nullif(excluded.summary, ''), articles.summary),
                     status = case
                         when articles.status in ('fetched', 'permanent_fail') then articles.status
                         else 'pending'
@@ -352,6 +364,30 @@ class SQLiteRepository:
             }
             for row in rows
         ]
+
+    def subscription_article_count(self, subscription_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "select count(*) as count from articles where subscription_id = ?",
+                (subscription_id,),
+            ).fetchone()
+        return int(row["count"] or 0) if row else 0
+
+    def subscription_oldest_published_at(self, subscription_id: str) -> datetime | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select published_at
+                from articles
+                where subscription_id = ? and published_at is not null
+                order by published_at asc
+                limit 1
+                """,
+                (subscription_id,),
+            ).fetchone()
+        if not row or not row["published_at"]:
+            return None
+        return _parse_dt(row["published_at"])
 
     def increment_verification_count(
         self,
@@ -518,6 +554,171 @@ class SQLiteRepository:
     def delete_credential(self, credential_id: str = "default") -> None:
         with self._connect() as conn:
             conn.execute("delete from credentials where id = ?", (credential_id,))
+
+    def save_login_session(self, session: LoginSession) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into login_sessions (
+                    id, qrcode_url, status, message, confirm_url, created_at, expires_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?)
+                on conflict(id) do update set
+                    qrcode_url = excluded.qrcode_url,
+                    status = excluded.status,
+                    message = excluded.message,
+                    confirm_url = excluded.confirm_url,
+                    expires_at = excluded.expires_at
+                """,
+                (
+                    session.id,
+                    session.qrcode_url,
+                    getattr(session.status, "value", session.status),
+                    session.message,
+                    session.confirm_url,
+                    _dt(session.created_at),
+                    _dt(session.expires_at) if session.expires_at else None,
+                ),
+            )
+
+    def get_login_session(self, session_id: str) -> LoginSession | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select id, qrcode_url, status, message, confirm_url, created_at, expires_at
+                from login_sessions
+                where id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return LoginSession(
+            id=row["id"],
+            qrcode_url=row["qrcode_url"] or "",
+            status=LoginStatus(row["status"] or LoginStatus.PENDING.value),
+            message=row["message"] or "",
+            confirm_url=row["confirm_url"] or "",
+            created_at=_parse_dt(row["created_at"]),
+            expires_at=_parse_dt(row["expires_at"]) if row["expires_at"] else None,
+        )
+
+    def create_background_job(
+        self,
+        *,
+        kind: str,
+        target: str = "",
+        total: int = 0,
+        message: str = "",
+    ) -> BackgroundJob:
+        now = datetime.now(timezone.utc)
+        job = BackgroundJob(
+            id=uuid.uuid4().hex,
+            kind=kind,
+            target=target,
+            total=total,
+            message=message,
+            created_at=now,
+            updated_at=now,
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into background_jobs (
+                    id, kind, status, target, total, processed, succeeded, failed,
+                    message, result, error, created_at, updated_at, finished_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job.id,
+                    job.kind,
+                    job.status,
+                    job.target,
+                    job.total,
+                    job.processed,
+                    job.succeeded,
+                    job.failed,
+                    job.message,
+                    json.dumps(job.result, ensure_ascii=False),
+                    job.error,
+                    _dt(job.created_at),
+                    _dt(job.updated_at),
+                    None,
+                ),
+            )
+        return job
+
+    def update_background_job(
+        self,
+        job_id: str,
+        *,
+        status: str | None = None,
+        total: int | None = None,
+        processed: int | None = None,
+        succeeded: int | None = None,
+        failed: int | None = None,
+        message: str | None = None,
+        result: dict[str, object] | None = None,
+        error: str | None = None,
+        finished: bool = False,
+    ) -> BackgroundJob | None:
+        current = self.get_background_job(job_id)
+        if not current:
+            return None
+        now = datetime.now(timezone.utc)
+        next_status = status if status is not None else current.status
+        finished_at = now if finished else current.finished_at
+        with self._connect() as conn:
+            conn.execute(
+                """
+                update background_jobs
+                set status = ?, total = ?, processed = ?, succeeded = ?, failed = ?,
+                    message = ?, result = ?, error = ?, updated_at = ?, finished_at = ?
+                where id = ?
+                """,
+                (
+                    next_status,
+                    current.total if total is None else total,
+                    current.processed if processed is None else processed,
+                    current.succeeded if succeeded is None else succeeded,
+                    current.failed if failed is None else failed,
+                    current.message if message is None else message,
+                    json.dumps(current.result if result is None else result, ensure_ascii=False),
+                    current.error if error is None else error,
+                    _dt(now),
+                    _dt(finished_at) if finished_at else None,
+                    job_id,
+                ),
+            )
+        return self.get_background_job(job_id)
+
+    def get_background_job(self, job_id: str) -> BackgroundJob | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select id, kind, status, target, total, processed, succeeded, failed,
+                       message, result, error, created_at, updated_at, finished_at
+                from background_jobs
+                where id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        return _job_from_row(row) if row else None
+
+    def latest_background_jobs(self, limit: int = 20) -> list[BackgroundJob]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select id, kind, status, target, total, processed, succeeded, failed,
+                       message, result, error, created_at, updated_at, finished_at
+                from background_jobs
+                order by created_at desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [_job_from_row(row) for row in rows]
 
     def record_poll_result(self, result: PollResult) -> None:
         with self._connect() as conn:
@@ -735,6 +936,16 @@ class SQLiteRepository:
                     expires_at text
                 );
 
+                create table if not exists login_sessions (
+                    id text primary key,
+                    qrcode_url text not null default '',
+                    status text not null default 'pending',
+                    message text not null default '',
+                    confirm_url text not null default '',
+                    created_at text not null,
+                    expires_at text
+                );
+
                 create table if not exists poll_runs (
                     id integer primary key autoincrement,
                     subscription_id text not null,
@@ -744,6 +955,23 @@ class SQLiteRepository:
                     message text,
                     started_at text not null,
                     finished_at text not null
+                );
+
+                create table if not exists background_jobs (
+                    id text primary key,
+                    kind text not null,
+                    status text not null default 'queued',
+                    target text not null default '',
+                    total integer not null default 0,
+                    processed integer not null default 0,
+                    succeeded integer not null default 0,
+                    failed integer not null default 0,
+                    message text not null default '',
+                    result text not null default '{}',
+                    error text not null default '',
+                    created_at text not null,
+                    updated_at text not null,
+                    finished_at text
                 );
 
                 create table if not exists verification_challenges (
@@ -772,6 +1000,8 @@ class SQLiteRepository:
 
                 create index if not exists idx_articles_subscription
                     on articles(subscription_id, published_at desc);
+                create index if not exists idx_background_jobs_created_at
+                    on background_jobs(created_at desc);
                 """
             )
             _ensure_column(conn, "subscriptions", "account_id", "text not null default ''")
@@ -783,6 +1013,7 @@ class SQLiteRepository:
             _ensure_column(conn, "articles", "unavailable_reason", "text not null default ''")
             _ensure_column(conn, "articles", "status", "text not null default 'fetched'")
             _ensure_column(conn, "articles", "source", "text not null default 'poll'")
+            _ensure_column(conn, "login_sessions", "confirm_url", "text not null default ''")
 
 
 class PostgresRepository(SQLiteRepository):
@@ -909,6 +1140,19 @@ class PostgresRepository(SQLiteRepository):
             )
             conn.execute(
                 """
+                create table if not exists login_sessions (
+                    id text primary key,
+                    qrcode_url text not null default '',
+                    status text not null default 'pending',
+                    message text not null default '',
+                    confirm_url text not null default '',
+                    created_at text not null,
+                    expires_at text
+                )
+                """
+            )
+            conn.execute(
+                """
                 create table if not exists poll_runs (
                     id bigint generated by default as identity primary key,
                     subscription_id text not null,
@@ -918,6 +1162,26 @@ class PostgresRepository(SQLiteRepository):
                     message text,
                     started_at text not null,
                     finished_at text not null
+                )
+                """
+            )
+            conn.execute(
+                """
+                create table if not exists background_jobs (
+                    id text primary key,
+                    kind text not null,
+                    status text not null default 'queued',
+                    target text not null default '',
+                    total integer not null default 0,
+                    processed integer not null default 0,
+                    succeeded integer not null default 0,
+                    failed integer not null default 0,
+                    message text not null default '',
+                    result text not null default '{}',
+                    error text not null default '',
+                    created_at text not null,
+                    updated_at text not null,
+                    finished_at text
                 )
                 """
             )
@@ -960,6 +1224,12 @@ class PostgresRepository(SQLiteRepository):
                     on articles(subscription_id, published_at desc)
                 """
             )
+            conn.execute(
+                """
+                create index if not exists idx_wechat_rss_background_jobs_created_at
+                    on background_jobs(created_at desc)
+                """
+            )
 
 
 class _PostgresConnection:
@@ -976,6 +1246,30 @@ class _PostgresConnection:
 
 def _pg_query(query: str) -> str:
     return query.replace("?", "%s")
+
+
+def _job_from_row(row: Any) -> BackgroundJob:
+    raw_result = row["result"] or "{}"
+    try:
+        result = json.loads(raw_result)
+    except Exception:
+        result = {}
+    return BackgroundJob(
+        id=row["id"],
+        kind=row["kind"],
+        status=row["status"],
+        target=row["target"] or "",
+        total=int(row["total"] or 0),
+        processed=int(row["processed"] or 0),
+        succeeded=int(row["succeeded"] or 0),
+        failed=int(row["failed"] or 0),
+        message=row["message"] or "",
+        result=result if isinstance(result, dict) else {},
+        error=row["error"] or "",
+        created_at=_parse_dt(row["created_at"]),
+        updated_at=_parse_dt(row["updated_at"]),
+        finished_at=_parse_dt(row["finished_at"]) if row["finished_at"] else None,
+    )
 
 
 def _safe_identifier(value: str) -> str:

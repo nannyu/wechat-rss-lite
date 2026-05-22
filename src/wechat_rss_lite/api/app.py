@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Awaitable, Callable
+
+from fastapi import BackgroundTasks
 
 from ..adapters import AccountProvider, LoginProvider
 from ..admin import ADMIN_HTML
@@ -40,6 +42,7 @@ from .schemas import (
 from .serializers import (
     account_to_dict,
     article_to_dict,
+    background_job_to_dict,
     blacklist_to_dict,
     category_to_dict,
     credential_reminder_loop,
@@ -53,6 +56,8 @@ from .serializers import (
     subscriptions_opml,
     verification_to_dict,
 )
+
+JobRunner = Callable[[str], Awaitable[dict[str, Any] | None]]
 
 def create_app(
     *,
@@ -84,8 +89,9 @@ def create_app(
     accounts = account_provider or WeChatMpAccountProvider(
         repository=repo,
         timeout=settings.request_timeout_seconds,
+        rate_limiter=limiter,
     )
-    login_provider = login_provider or build_login_provider(settings)
+    login_provider = login_provider or build_login_provider(settings, repo)
     auth = AuthManager(
         repository=repo,
         login_provider=login_provider,
@@ -146,6 +152,63 @@ def create_app(
         article_stats = (stats_map or repo.subscription_article_stats()).get(subscription.id)
         return subscription_to_dict(subscription, settings=settings, article_stats=article_stats)
 
+    def job_payload(job_id: str) -> dict[str, Any]:
+        job = repo.get_background_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return background_job_to_dict(job)
+
+    def queue_job(
+        background_tasks: Any,
+        *,
+        kind: str,
+        target: str = "",
+        total: int = 0,
+        message: str = "任务已加入后台队列",
+        runner: JobRunner,
+    ) -> dict[str, Any]:
+        job = repo.create_background_job(kind=kind, target=target, total=total, message=message)
+        background_tasks.add_task(run_job, job.id, runner)
+        return background_job_to_dict(job)
+
+    async def run_job(job_id: str, runner: JobRunner) -> None:
+        repo.update_background_job(job_id, status="running", message="后台任务运行中")
+        try:
+            result = await runner(job_id)
+            current = repo.get_background_job(job_id)
+            repo.update_background_job(
+                job_id,
+                status="succeeded",
+                processed=current.processed if current else None,
+                succeeded=current.succeeded if current else None,
+                failed=current.failed if current else None,
+                message="任务完成",
+                result=result or {},
+                finished=True,
+            )
+        except Exception as exc:
+            current = repo.get_background_job(job_id)
+            repo.update_background_job(
+                job_id,
+                status="failed",
+                processed=current.processed if current else None,
+                succeeded=current.succeeded if current else None,
+                failed=(current.failed if current else 0) + 1,
+                message="任务失败",
+                error=str(exc),
+                finished=True,
+            )
+
+    def update_job_progress(job_id: str, progress: dict[str, int | str]) -> None:
+        repo.update_background_job(
+            job_id,
+            total=int(progress.get("total", 0) or 0),
+            processed=int(progress.get("processed", 0) or 0),
+            succeeded=int(progress.get("succeeded", 0) or 0),
+            failed=int(progress.get("failed", 0) or 0),
+            message=str(progress.get("message", "")),
+        )
+
     @app.get("/", response_class=HTMLResponse)
     @app.get("/admin", response_class=HTMLResponse)
     async def admin() -> str:
@@ -194,6 +257,14 @@ def create_app(
     async def get_rate_limit() -> dict[str, Any]:
         return limiter.stats()
 
+    @app.get("/jobs", dependencies=[Depends(admin_dep)])
+    async def list_jobs(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, Any]]:
+        return [background_job_to_dict(job) for job in repo.latest_background_jobs(limit=limit)]
+
+    @app.get("/jobs/{job_id}", dependencies=[Depends(admin_dep)])
+    async def get_job(job_id: str) -> dict[str, Any]:
+        return job_payload(job_id)
+
     @app.put("/rate-limit", dependencies=[Depends(admin_dep)])
     async def update_rate_limit(request: RateLimitRequest) -> dict[str, Any]:
         limiter.configure(
@@ -239,7 +310,7 @@ def create_app(
           <main>
             <h1>确认登录</h1>
             <p>确认后，当前后台会话将获得本地管理凭证。</p>
-            <form method="post" action="/login/confirm/{session_id}">
+            <form method="post" action="{settings.site_url.rstrip('/')}/login/confirm/{session_id}">
               <button type="submit">确认登录</button>
             </form>
           </main>
@@ -357,13 +428,15 @@ def create_app(
         if not article:
             raise HTTPException(status_code=404, detail="Article not found")
         data = article_to_dict(article, image_proxy_base=api_image_proxy_base)
-        return HTMLResponse(build_reader_html(data))
+        return HTMLResponse(build_reader_html(data, image_proxy_base=site_image_proxy_base))
 
     @app.post("/articles/refresh", dependencies=[Depends(admin_dep)])
     async def refresh_downloaded_articles(
+        background_tasks: BackgroundTasks,
         url: str | None = Query(default=None),
         subscription_id: str | None = Query(default=None),
         limit: int | None = Query(default=None, ge=1, le=500),
+        background: bool = Query(default=False),
     ) -> dict[str, Any]:
         if url:
             _validate_wechat_article_url(url)
@@ -378,6 +451,22 @@ def create_app(
         )
         if url and not targets:
             raise HTTPException(status_code=404, detail="Article not found")
+        if background:
+            async def runner(job_id: str) -> dict[str, Any]:
+                return await refresh_article_targets(
+                    ctx,
+                    targets,
+                    progress_callback=lambda progress: update_job_progress(job_id, progress),
+                )
+
+            return queue_job(
+                background_tasks,
+                kind="articles.refresh",
+                target=url or subscription_id or "all",
+                total=len(targets),
+                message=f"准备重新拉取 {len(targets)} 篇文章",
+                runner=runner,
+            )
         result = await refresh_article_targets(ctx, targets)
         if not url:
             result["batch_limit"] = batch_limit
@@ -482,8 +571,10 @@ def create_app(
 
     @app.post("/subscriptions/import", dependencies=[Depends(admin_dep)])
     async def import_subscriptions(
+        background_tasks: BackgroundTasks,
         text: str = Form(default=""),
         file: UploadFile | None = File(default=None),
+        background: bool = Query(default=False),
     ) -> dict[str, Any]:
         from ..importer import parse_subscription_import
 
@@ -493,6 +584,33 @@ def create_app(
             entries = parse_subscription_import(text=text, filename=filename, content=content)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if background:
+            async def runner(job_id: str) -> dict[str, Any]:
+                imported: list[dict[str, Any]] = []
+                for index, entry in enumerate(entries, start=1):
+                    subscription = Subscription(id=entry.id, title=entry.title, account_id=entry.id)
+                    repo.add_subscription(subscription)
+                    imported.append(subscription_payload(subscription))
+                    update_job_progress(
+                        job_id,
+                        {
+                            "processed": index,
+                            "total": len(entries),
+                            "succeeded": len(imported),
+                            "failed": 0,
+                            "message": f"已导入 {index}/{len(entries)} 个订阅",
+                        },
+                    )
+                return {"imported": len(imported), "items": imported}
+
+            return queue_job(
+                background_tasks,
+                kind="subscriptions.import",
+                target="bulk",
+                total=len(entries),
+                message=f"准备导入 {len(entries)} 个订阅",
+                runner=runner,
+            )
         imported: list[dict[str, Any]] = []
         for entry in entries:
             subscription = Subscription(id=entry.id, title=entry.title, account_id=entry.id)
@@ -563,8 +681,10 @@ def create_app(
 
     @app.post("/subscriptions/{subscription_id}/articles/refresh", dependencies=[Depends(admin_dep)])
     async def refresh_subscription_articles(
+        background_tasks: BackgroundTasks,
         subscription_id: str,
         limit: int | None = Query(default=None, ge=1, le=500),
+        background: bool = Query(default=False),
     ) -> dict[str, Any]:
         find_subscription(subscription_id)
         batch_limit = settings.refresh_batch_limit if limit is None else limit
@@ -573,33 +693,124 @@ def create_app(
             status="fetched",
             limit=batch_limit,
         )
+        if background:
+            async def runner(job_id: str) -> dict[str, Any]:
+                return await refresh_article_targets(
+                    ctx,
+                    targets,
+                    progress_callback=lambda progress: update_job_progress(job_id, progress),
+                )
+
+            return queue_job(
+                background_tasks,
+                kind="subscription.refresh",
+                target=subscription_id,
+                total=len(targets),
+                message=f"准备重新拉取 {len(targets)} 篇文章",
+                runner=runner,
+            )
         result = await refresh_article_targets(ctx, targets)
         result["batch_limit"] = batch_limit
         return result
 
     @app.post("/subscriptions/{subscription_id}/poll", dependencies=[Depends(admin_dep)])
-    async def poll_subscription(subscription_id: str, limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
+    async def poll_subscription(
+        background_tasks: BackgroundTasks,
+        subscription_id: str,
+        limit: int = Query(default=20, ge=1, le=100),
+        background: bool = Query(default=False),
+    ) -> dict[str, Any]:
         subscription = find_subscription(subscription_id)
+        if background:
+            async def runner(job_id: str) -> dict[str, Any]:
+                result = await poller.poll_subscription(
+                    subscription,
+                    limit=limit,
+                    progress_callback=lambda progress: update_job_progress(job_id, progress),
+                )
+                return poll_result_to_dict(result)
+
+            return queue_job(
+                background_tasks,
+                kind="subscription.poll",
+                target=subscription_id,
+                total=limit,
+                message=f"准备轮询 {subscription.title or subscription.id} 最新文章",
+                runner=runner,
+            )
         return poll_result_to_dict(await poller.poll_subscription(subscription, limit=limit))
 
     @app.post("/subscriptions/{subscription_id}/history", dependencies=[Depends(admin_dep)])
     async def fetch_subscription_history(
+        background_tasks: BackgroundTasks,
         subscription_id: str,
         pages: int = Query(default=5, ge=1, le=50),
         page_size: int = Query(default=20, ge=1, le=100),
+        count: int | None = Query(default=None, ge=1, le=500),
+        older_than_local: bool = Query(default=False),
         keyword: str = "",
+        background: bool = Query(default=False),
     ) -> dict[str, Any]:
         subscription = find_subscription(subscription_id)
-        result = await poller.fetch_history(
-            subscription,
-            pages=pages,
-            page_size=page_size,
-            keyword=keyword,
-        )
+        target_count = count if count is not None else pages * page_size
+        if background:
+            async def runner(job_id: str) -> dict[str, Any]:
+                result = await poller.fetch_history(
+                    subscription,
+                    pages=pages,
+                    page_size=page_size,
+                    count=count,
+                    older_than_local=older_than_local,
+                    keyword=keyword,
+                    progress_callback=lambda progress: update_job_progress(job_id, progress),
+                )
+                return poll_result_to_dict(result)
+
+            return queue_job(
+                background_tasks,
+                kind="subscription.history",
+                target=subscription_id,
+                total=target_count,
+                message=f"准备拉取 {target_count} 篇历史文章",
+                runner=runner,
+            )
+        try:
+            result = await poller.fetch_history(
+                subscription,
+                pages=pages,
+                page_size=page_size,
+                count=count,
+                older_than_local=older_than_local,
+                keyword=keyword,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"历史文章拉取失败：{exc}") from exc
         return poll_result_to_dict(result)
 
     @app.post("/poll", dependencies=[Depends(admin_dep)])
-    async def poll_all(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, Any]]:
+    async def poll_all(
+        background_tasks: BackgroundTasks,
+        limit: int = Query(default=20, ge=1, le=100),
+        background: bool = Query(default=False),
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        if background:
+            enabled_count = sum(1 for subscription in repo.list_subscriptions() if subscription.enabled)
+
+            async def runner(job_id: str) -> dict[str, Any]:
+                results = await poller.poll_all(
+                    limit_per_subscription=limit,
+                    progress_callback=lambda progress: update_job_progress(job_id, progress),
+                )
+                return {"results": [poll_result_to_dict(result) for result in results]}
+
+            return queue_job(
+                background_tasks,
+                kind="subscriptions.poll",
+                target="all",
+                total=enabled_count,
+                message=f"准备轮询 {enabled_count} 个公众号",
+                runner=runner,
+            )
         return [poll_result_to_dict(result) for result in await poller.poll_all(limit_per_subscription=limit)]
 
     @app.get("/poll/runs", dependencies=[Depends(admin_dep)])

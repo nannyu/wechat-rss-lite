@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import segno
 
@@ -17,8 +18,15 @@ class LocalQrLoginProvider:
     third-party identity system.
     """
 
-    def __init__(self, *, base_url: str, session_ttl: timedelta = timedelta(minutes=10)) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        repository: Any | None = None,
+        session_ttl: timedelta = timedelta(minutes=10),
+    ) -> None:
         self.base_url = base_url.rstrip("/")
+        self.repository = repository
         self.session_ttl = session_ttl
         self._sessions: dict[str, LoginSession] = {}
 
@@ -34,14 +42,14 @@ class LocalQrLoginProvider:
             confirm_url=confirm_url,
             expires_at=expires_at,
         )
-        self._sessions[session_id] = session
+        self._save_session(session)
         return session
 
     async def poll_session(self, session_id: str) -> LoginSession:
         session = self._get_session(session_id)
         if _expired(session):
             session = _replace_session(session, status=LoginStatus.EXPIRED, message="登录二维码已过期。")
-            self._sessions[session_id] = session
+            self._save_session(session)
         return session
 
     async def confirm_session(self, session_id: str) -> LoginSession:
@@ -49,7 +57,7 @@ class LocalQrLoginProvider:
         if session.status == LoginStatus.EXPIRED:
             return session
         session = _replace_session(session, status=LoginStatus.CONFIRMED, message="扫码确认完成，可以返回后台完成登录。")
-        self._sessions[session_id] = session
+        self._save_session(session)
         return session
 
     async def complete_session(self, session_id: str) -> Credential:
@@ -65,7 +73,8 @@ class LocalQrLoginProvider:
         )
 
     def _get_session(self, session_id: str) -> LoginSession:
-        session = self._sessions.get(session_id)
+        session = self.repository.get_login_session(session_id) if self.repository else None
+        session = session or self._sessions.get(session_id)
         if not session:
             return LoginSession(
                 id=session_id,
@@ -74,6 +83,11 @@ class LocalQrLoginProvider:
                 message="登录会话不存在。",
             )
         return session
+
+    def _save_session(self, session: LoginSession) -> None:
+        if self.repository:
+            self.repository.save_login_session(session)
+        self._sessions[session.id] = session
 
 
 def _expired(session: LoginSession) -> bool:

@@ -7,7 +7,7 @@ from typing import Any
 from ..content_processor import reader_body_from_html
 
 
-def build_reader_html(article: dict[str, Any]) -> str:
+def build_reader_html(article: dict[str, Any], *, image_proxy_base: str = "") -> str:
     title = html_lib.escape(article.get("title") or "未命名文章")
     meta_parts = [
         html_lib.escape(str(article.get("account_name") or article.get("author") or "")),
@@ -30,6 +30,7 @@ def build_reader_html(article: dict[str, Any]) -> str:
 
     content_html = article.get("content_html") or ""
     body = reader_body_from_html(content_html) if content_html else ""
+    body = rebase_reader_image_urls(body, image_proxy_base)
     if not body.strip():
         body = reader_html_from_text(article.get("text") or article.get("summary") or "")
     if not body.strip():
@@ -121,3 +122,19 @@ def reader_html_from_text(text: str) -> str:
         else:
             blocks.append(f"<p>{escaped}</p>")
     return f'<div class="plain-text">{"".join(blocks)}</div>'
+
+
+def rebase_reader_image_urls(body: str, image_proxy_base: str) -> str:
+    base = (image_proxy_base or "").strip().rstrip("/")
+    if not body or not base:
+        return body
+
+    def replace(match: re.Match[str]) -> str:
+        return f'{match.group("attr")}{match.group("quote")}{base}?url='
+
+    return re.sub(
+        r'(?P<attr>\s(?:src|data-src)=)(?P<quote>["\'])/image\?url=',
+        replace,
+        body,
+        flags=re.IGNORECASE,
+    )

@@ -171,6 +171,23 @@
     button.danger:hover { background: #FEE2E2; }
 
     button.icon-button { padding: 8px; display: inline-flex; align-items: center; justify-content: center; }
+    .history-count-input { width: 76px; padding: 8px 10px; min-height: 36px; }
+    .history-progress { display: grid; gap: 6px; margin-top: 4px; }
+    .history-progress[hidden] { display: none; }
+    .history-progress-bar { height: 8px; border-radius: 999px; background: #E2E8F0; overflow: hidden; }
+    .history-progress-bar span { display: block; height: 100%; background: var(--primary); transition: width 0.25s ease; }
+    .history-progress-text { font-size: 12px; color: var(--text-muted); }
+    .history-progress.done .history-progress-bar span { background: #10B981; }
+    .history-progress.error .history-progress-bar span { background: #EF4444; }
+    .job-progress-panel { display: grid; gap: 10px; margin-bottom: 16px; }
+    .job-progress-panel[hidden] { display: none; }
+    .job-progress-item { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: #F8FAFC; }
+    .job-progress-head { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 600; color: var(--text-main); }
+    .job-progress-message { font-size: 12px; color: var(--text-muted); }
+    .job-progress-bar { height: 8px; border-radius: 999px; background: #E2E8F0; overflow: hidden; }
+    .job-progress-bar span { display: block; height: 100%; background: var(--primary); transition: width 0.25s ease; }
+    .job-progress-item.done .job-progress-bar span { background: #10B981; }
+    .job-progress-item.error .job-progress-bar span { background: #EF4444; }
 
     .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
     .col { display: flex; flex-direction: column; gap: 16px; }

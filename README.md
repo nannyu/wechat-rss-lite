@@ -10,6 +10,7 @@ The package is designed as **library first, API optional**:
 - Expose an optional FastAPI app for projects that want HTTP endpoints.
 - Avoid bundling account-specific crawling logic into the core. Authenticated discovery can be provided through a small adapter interface.
 - Provide product scaffolding for QR login providers, credential expiry notifications, account search/list adapters, RSS polling, image proxying, proxy rotation, request limiting, webhooks, and an admin page.
+- Run long polling, history imports, subscription imports, and article refreshes as persistent background jobs with queryable progress.
 
 ## Install
 
@@ -52,6 +53,7 @@ uvicorn wechat_rss_lite.api:create_app --factory --host 127.0.0.1 --port 8080
 - Optionally set `RSS_READ_TOKEN` to require the same auth on `/feeds/*.rss`. When unset, feeds stay public (convenient for local dev). Subscription export and Admin “复制 RSS” URLs include `?token=` automatically when configured.
 - The image proxy (`/image`) stays public so RSS HTML and avatars can load in external readers.
 - Bulk article refresh is capped by `REFRESH_BATCH_LIMIT` (default `50`) to avoid hour-long HTTP requests.
+- Background jobs are stored in the repository so the admin UI can keep showing progress after a browser refresh.
 
 Endpoints:
 
@@ -62,10 +64,19 @@ Endpoints:
 - `GET /accounts/search`
 - `GET /accounts/{account_id}/articles`
 - `POST /subscriptions`
-- `POST /poll`
+- `POST /subscriptions/import`
+- `POST /subscriptions/{subscription_id}/history?background=true`
+- `POST /subscriptions/{subscription_id}/poll?background=true`
+- `POST /subscriptions/{subscription_id}/articles/refresh?background=true`
+- `POST /articles/refresh?background=true`
+- `POST /poll?background=true`
+- `GET /jobs`
+- `GET /jobs/{job_id}`
 - `GET /feeds/{subscription_id}.rss`
 - `GET /image?url=...`
 - `GET /admin`
+
+History fetching can be called with `older_than_local=true` and a `count` value to continue backward from the oldest locally stored article. Latest polling and article refresh both emit progress updates to the background job record.
 
 ## Optional Browser-Compatible TLS Transport
 
