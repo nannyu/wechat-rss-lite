@@ -8,6 +8,8 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Settings:
     db_path: Path = Path("wechat-rss-lite.db")
+    database_url: str = ""
+    database_schema: str = "wechat_rss_lite"
     site_url: str = "http://localhost:8080"
     poll_interval_seconds: int = 3600
     request_timeout_seconds: float = 15.0
@@ -38,6 +40,12 @@ class Settings:
         _load_dotenv()
         return cls(
             db_path=Path(os.getenv("WECHAT_RSS_DB_PATH", "wechat-rss-lite.db")),
+            database_url=(
+                os.getenv("WECHAT_RSS_DATABASE_URL", "").strip()
+                or os.getenv("DATABASE_URL", "").strip()
+            ),
+            database_schema=os.getenv("WECHAT_RSS_DATABASE_SCHEMA", "wechat_rss_lite").strip()
+            or "wechat_rss_lite",
             site_url=os.getenv("SITE_URL", "http://localhost:8080").rstrip("/"),
             poll_interval_seconds=_int("RSS_POLL_INTERVAL", 3600),
             request_timeout_seconds=_float("REQUEST_TIMEOUT_SECONDS", 15.0),

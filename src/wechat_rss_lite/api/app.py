@@ -16,7 +16,7 @@ from ..poller import RssPoller
 from ..proxy import ProxyPool
 from ..rate_limit import AsyncRateLimiter
 from ..rss import render_rss
-from ..storage import SQLiteRepository
+from ..storage import SQLiteRepository, create_repository
 from ..wechat_account import WeChatMpAccountProvider
 from ..webhook import WebhookNotifier
 from ..wechat_login import validate_wechat_credential
@@ -73,7 +73,7 @@ def create_app(
     settings = settings or Settings.from_env()
     site_image_proxy_base = resolve_image_proxy_base(settings)
     api_image_proxy_base = "/image"
-    repo = repository or SQLiteRepository(settings.db_path)
+    repo = repository or create_repository(settings)
     proxies = ProxyPool(settings.proxy_urls)
     limiter = AsyncRateLimiter(
         per_minute=settings.rate_limit_per_minute,
@@ -698,4 +698,3 @@ def create_app(
         return Response(content=body, media_type=content_type)
 
     return app
-
