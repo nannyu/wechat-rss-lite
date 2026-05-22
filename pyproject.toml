@@ -5,10 +5,10 @@ build-backend = "hatchling.build"
 [project]
 name = "wechat-rss-lite"
 version = "0.1.0"
-description = "Lightweight Apache-2.0 toolkit for parsing WeChat articles and producing RSS feeds."
+description = "Lightweight AGPL-3.0-only toolkit for parsing WeChat articles and producing RSS feeds."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 authors = [{ name = "wechat-rss-lite contributors" }]
 dependencies = [
   "httpx>=0.27,<1",

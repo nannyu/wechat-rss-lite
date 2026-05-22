@@ -1,6 +1,6 @@
 # wechat-rss-lite
 
-Lightweight Apache-2.0 toolkit for integrating WeChat public article parsing and RSS generation into other Python projects.
+Lightweight AGPL-3.0-only toolkit for integrating WeChat public article parsing and RSS generation into other Python projects.
 
 The package is designed as **library first, API optional**:
 
@@ -113,4 +113,4 @@ class MyAccountProvider(AccountProvider):
 
 ## License
 
-Apache-2.0. See `LICENSE` and `NOTICE`.
+AGPL-3.0-only. See `LICENSE` and `NOTICE`.
