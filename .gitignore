@@ -6,8 +6,8 @@ __pycache__/
 dist/
 build/
 *.db
+.DS_Store
 
 # Local environment (secrets)
 .env
 .env.local
-
