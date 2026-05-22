@@ -118,6 +118,33 @@
       try { return new Date(value).toLocaleString(); } catch { return value; }
     }
 
+    function renderSubscriptionStats(item) {
+      const total = Number(item.article_total || 0);
+      const fetched = Number(item.article_fetched || 0);
+      const remaining = Number(item.article_remaining || 0);
+      const failed = Number(item.article_failed || 0);
+      return `
+        <div class="subscription-stats">
+          <div class="stat-chip">
+            <span class="stat-label">文章总数</span>
+            <span class="stat-value">${total}</span>
+          </div>
+          <div class="stat-chip accent">
+            <span class="stat-label">已拉取</span>
+            <span class="stat-value">${fetched}</span>
+          </div>
+          <div class="stat-chip warn">
+            <span class="stat-label">待拉取</span>
+            <span class="stat-value">${remaining}</span>
+          </div>
+          <div class="stat-chip">
+            <span class="stat-label">拉取失败</span>
+            <span class="stat-value">${failed}</span>
+          </div>
+        </div>
+      `;
+    }
+
     document.addEventListener("DOMContentLoaded", () => {
       if (adminToken) {
         try {
@@ -180,7 +207,12 @@
         loginSession = res.data.id || "";
         renderLoginDialog(res.data);
       } else {
-        document.getElementById('qrBox').textContent = "创建失败";
+        const detail = res.text || "创建失败";
+        document.getElementById('qrBox').textContent = detail;
+        document.getElementById('loginHint').textContent =
+          detail.includes("Admin token") || detail.includes("not configured")
+            ? "请在项目根目录执行 npm run wechat-rss:sync-env，并重启 npm run wechat-rss:dev 与 npm run dev。"
+            : "请确认 wechat-rss-lite 在 8081 端口运行，且网络可访问微信公众平台。";
       }
     }
 
@@ -441,20 +473,25 @@
       }
       items.forEach(item => {
         const div = document.createElement('div');
-        div.className = 'item-card';
+        div.className = 'item-card subscription-card';
         const feedUrl = item.feed_url || `/feeds/${item.id}.rss`;
+        const description = item.description
+          ? `<div class="subscription-desc">${escapeHtml(item.description)}</div>`
+          : '<div class="subscription-desc" style="color:#94A3B8;">暂无简介</div>';
         div.innerHTML = `
           <div class="item-top">
-            <div class="result-body">
+            <div class="result-body" style="flex:1; min-width:0;">
               <div class="avatar"><img src="${item.avatar_url||''}" onerror="this.style.display='none'"></div>
-              <div class="item-info">
-                <div class="item-title">${item.title || item.id}</div>
-                <div class="item-meta">ID: ${item.account_id || item.id}</div>
+              <div class="item-info" style="min-width:0;">
+                <div class="item-title">${escapeHtml(item.title || item.id)}</div>
+                <div class="item-meta">ID: ${escapeHtml(item.account_id || item.id)}</div>
+                ${description}
               </div>
             </div>
             <button class="switch-btn ${item.enabled ? 'on' : ''}"></button>
           </div>
-          <select class="category-select" style="margin: 8px 0; padding: 6px; font-size: 13px;"></select>
+          ${renderSubscriptionStats(item)}
+          <select class="category-select" style="padding: 6px; font-size: 13px;"></select>
           <div class="row" style="gap: 8px; margin-top: auto;">
             <button class="icon-button secondary" title="复制 RSS" data-action="copy-feed"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
             <button class="icon-button secondary" title="轮询更新" onclick="pollSubscription('${item.id}')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg></button>
@@ -500,7 +537,10 @@
     async function pollSubscription(id) {
       showToast("正在轮询更新...");
       const res = await requestJson(`/subscriptions/${encodeURIComponent(id)}/poll`, { method: "POST", body: "{}" });
-      if (res.ok) showToast("轮询完成");
+      if (res.ok) {
+        showToast("轮询完成");
+        loadSubscriptions();
+      }
     }
 
     async function refreshAllDownloadedArticles(button) {
@@ -532,6 +572,7 @@
       const firstError = res.data?.errors?.[0]?.error;
       const detail = failed && firstError ? `，原因：${firstError}` : "";
       const limitHint = batchLimit && refreshed >= batchLimit ? `（本批上限 ${batchLimit} 篇，可再次执行）` : "";
+      loadSubscriptions();
       showToast(`${successPrefix}: 成功 ${refreshed} 篇，失败 ${failed} 篇${detail}${limitHint}`, failed > 0);
       if (document.getElementById('sec-reader').classList.contains('active')) {
         loadDownloadedArticles();

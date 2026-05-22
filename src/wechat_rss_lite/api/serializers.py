@@ -71,7 +71,12 @@ def account_to_dict(account: Any) -> dict[str, Any]:
     }
 
 
-def subscription_to_dict(subscription: Subscription, *, settings: Settings | None = None) -> dict[str, Any]:
+def subscription_to_dict(
+    subscription: Subscription,
+    *,
+    settings: Settings | None = None,
+    article_stats: dict[str, int] | None = None,
+) -> dict[str, Any]:
     if settings:
         feed_url = public_feed_url(settings, f"/feeds/{subscription.id}.rss")
         history_feed_url = public_feed_url(settings, f"/feeds/{subscription.id}/history.rss")
@@ -91,6 +96,11 @@ def subscription_to_dict(subscription: Subscription, *, settings: Settings | Non
         "enabled": subscription.enabled,
         "created_at": subscription.created_at.isoformat(),
         "updated_at": subscription.updated_at.isoformat(),
+        "article_total": (article_stats or {}).get("article_total", 0),
+        "article_fetched": (article_stats or {}).get("article_fetched", 0),
+        "article_pending": (article_stats or {}).get("article_pending", 0),
+        "article_failed": (article_stats or {}).get("article_failed", 0),
+        "article_remaining": (article_stats or {}).get("article_remaining", 0),
     }
 
 

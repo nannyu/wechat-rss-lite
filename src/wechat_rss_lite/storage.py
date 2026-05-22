@@ -92,6 +92,34 @@ class SQLiteRepository:
             )
         return next((item for item in self.list_subscriptions() if item.id == subscription_id), None)
 
+    def subscription_article_stats(self) -> dict[str, dict[str, int]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select subscription_id,
+                       count(*) as article_total,
+                       sum(case when status = 'fetched' then 1 else 0 end) as article_fetched,
+                       sum(case when status = 'pending' then 1 else 0 end) as article_pending,
+                       sum(case when status = 'failed' then 1 else 0 end) as article_failed
+                from articles
+                where subscription_id is not null and subscription_id != ''
+                group by subscription_id
+                """
+            ).fetchall()
+        stats: dict[str, dict[str, int]] = {}
+        for row in rows:
+            subscription_id = row["subscription_id"]
+            pending = int(row["article_pending"] or 0)
+            failed = int(row["article_failed"] or 0)
+            stats[subscription_id] = {
+                "article_total": int(row["article_total"] or 0),
+                "article_fetched": int(row["article_fetched"] or 0),
+                "article_pending": pending,
+                "article_failed": failed,
+                "article_remaining": pending + failed,
+            }
+        return stats
+
     def save_article(self, article: Article, subscription_id: str | None = None, *, source: str | None = None) -> None:
         article_source = source or article.source or "poll"
         with self._connect() as conn:

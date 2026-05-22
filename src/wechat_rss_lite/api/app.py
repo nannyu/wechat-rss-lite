@@ -142,6 +142,10 @@ def create_app(
 
     find_subscription = make_find_subscription(repo)
 
+    def subscription_payload(subscription: Subscription, *, stats_map: dict[str, dict[str, int]] | None = None) -> dict[str, Any]:
+        article_stats = (stats_map or repo.subscription_article_stats()).get(subscription.id)
+        return subscription_to_dict(subscription, settings=settings, article_stats=article_stats)
+
     @app.get("/", response_class=HTMLResponse)
     @app.get("/admin", response_class=HTMLResponse)
     async def admin() -> str:
@@ -200,7 +204,10 @@ def create_app(
 
     @app.post("/login/sessions", dependencies=[Depends(admin_dep)])
     async def create_login_session() -> dict[str, Any]:
-        return login_session_to_dict(await auth.create_login_session())
+        try:
+            return login_session_to_dict(await auth.create_login_session())
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/login/sessions/{session_id}", dependencies=[Depends(admin_dep)])
     async def poll_login_session(session_id: str) -> dict[str, Any]:
@@ -417,18 +424,22 @@ def create_app(
             enabled=request.enabled,
         )
         repo.add_subscription(subscription)
-        return subscription_to_dict(subscription, settings=settings)
+        return subscription_payload(subscription)
 
     @app.get("/subscriptions", dependencies=[Depends(admin_dep)])
     async def list_subscriptions() -> list[dict[str, Any]]:
-        return [subscription_to_dict(subscription, settings=settings) for subscription in repo.list_subscriptions()]
+        stats_map = repo.subscription_article_stats()
+        return [
+            subscription_payload(subscription, stats_map=stats_map)
+            for subscription in repo.list_subscriptions()
+        ]
 
     @app.patch("/subscriptions/{subscription_id}", dependencies=[Depends(admin_dep)])
     async def update_subscription(subscription_id: str, request: SubscriptionUpdateRequest) -> dict[str, Any]:
         subscription = find_subscription(subscription_id)
         if request.enabled is None:
             if request.category_id is None:
-                return subscription_to_dict(subscription, settings=settings)
+                return subscription_payload(subscription)
             updated = repo.set_subscription_category(subscription_id, request.category_id)
         else:
             updated = repo.set_subscription_enabled(subscription_id, request.enabled)
@@ -436,7 +447,7 @@ def create_app(
                 updated = repo.set_subscription_category(subscription_id, request.category_id)
         if not updated:
             raise HTTPException(status_code=404, detail="Subscription not found")
-        return subscription_to_dict(updated, settings=settings)
+        return subscription_payload(updated)
 
     @app.get("/categories", dependencies=[Depends(admin_dep)])
     async def list_categories() -> list[dict[str, Any]]:
@@ -486,7 +497,7 @@ def create_app(
         for entry in entries:
             subscription = Subscription(id=entry.id, title=entry.title, account_id=entry.id)
             repo.add_subscription(subscription)
-            imported.append(subscription_to_dict(subscription, settings=settings))
+            imported.append(subscription_payload(subscription))
         return {"imported": len(imported), "items": imported}
 
     @app.delete("/subscriptions/{subscription_id}", dependencies=[Depends(admin_dep)])
