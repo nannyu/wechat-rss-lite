@@ -181,6 +181,59 @@ class HistoryProvider:
         ]
 
 
+class DatedHistoryProvider:
+    def __init__(self) -> None:
+        self.base = datetime(2026, 1, 10, tzinfo=timezone.utc)
+
+    async def search_accounts(self, query: str, *, limit: int = 10) -> list[AccountProfile]:
+        return []
+
+    async def list_articles(
+        self,
+        account_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 20,
+        keyword: str = "",
+    ) -> list[ArticleSummary]:
+        items = [
+            ArticleSummary(
+                url=f"https://mp.weixin.qq.com/s/dated-{index}",
+                title=f"Dated {index}",
+                account_id=account_id,
+                published_at=int((self.base - timedelta(days=index)).timestamp()),
+            )
+            for index in range(6)
+        ]
+        return items[offset:offset + limit]
+
+
+class OffsetTrackingHistoryProvider:
+    def __init__(self) -> None:
+        self.offsets: list[int] = []
+
+    async def search_accounts(self, query: str, *, limit: int = 10) -> list[AccountProfile]:
+        return []
+
+    async def list_articles(
+        self,
+        account_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 20,
+        keyword: str = "",
+    ) -> list[ArticleSummary]:
+        self.offsets.append(offset)
+        return [
+            ArticleSummary(
+                url=f"https://mp.weixin.qq.com/s/offset-{index}",
+                title=f"Offset {index}",
+                account_id=account_id,
+            )
+            for index in range(offset, offset + limit)
+        ]
+
+
 async def test_poller_fetches_and_stores_articles(tmp_path) -> None:
     repo = SQLiteRepository(tmp_path / "test.db")
     subscription = Subscription(id="acct", title="Account", account_id="acct")
@@ -215,6 +268,65 @@ async def test_poller_fetches_history_pages_into_local_database(tmp_path) -> Non
     assert result.fetched == 2
     assert result.stored == 2
     assert len(repo.recent_articles(subscription_id="acct")) == 2
+
+
+async def test_history_fetch_continues_before_oldest_local_article(tmp_path) -> None:
+    repo = SQLiteRepository(tmp_path / "test.db")
+    subscription = Subscription(id="acct", title="Account", account_id="acct")
+    repo.add_subscription(subscription)
+    repo.save_article(
+        Article(
+            url="https://mp.weixin.qq.com/s/dated-2",
+            title="Existing",
+            published_at=datetime(2026, 1, 8, tzinfo=timezone.utc),
+        ),
+        subscription_id="acct",
+    )
+    poller = RssPoller(
+        repository=repo,
+        account_provider=DatedHistoryProvider(),
+        article_client=FakeArticleClient(),
+    )
+
+    result = await poller.fetch_history(
+        subscription,
+        page_size=2,
+        count=2,
+        older_than_local=True,
+    )
+    urls = {article.url for article in repo.recent_articles(subscription_id="acct", limit=10)}
+
+    assert result.fetched == 2
+    assert "https://mp.weixin.qq.com/s/dated-3" in urls
+    assert "https://mp.weixin.qq.com/s/dated-4" in urls
+    assert repo.subscription_oldest_published_at("acct") == datetime(2026, 1, 6, tzinfo=timezone.utc)
+
+
+async def test_history_fetch_uses_existing_count_when_local_dates_are_missing(tmp_path) -> None:
+    repo = SQLiteRepository(tmp_path / "test.db")
+    subscription = Subscription(id="acct", title="Account", account_id="acct")
+    repo.add_subscription(subscription)
+    for index in range(3):
+        repo.save_article(
+            Article(url=f"https://mp.weixin.qq.com/s/existing-{index}", title=f"Existing {index}"),
+            subscription_id="acct",
+        )
+    provider = OffsetTrackingHistoryProvider()
+    poller = RssPoller(
+        repository=repo,
+        account_provider=provider,
+        article_client=FakeArticleClient(),
+    )
+
+    result = await poller.fetch_history(
+        subscription,
+        page_size=1,
+        count=1,
+        older_than_local=True,
+    )
+
+    assert result.fetched == 1
+    assert provider.offsets == [3]
 
 
 async def test_poller_skips_blacklisted_subscription(tmp_path) -> None:

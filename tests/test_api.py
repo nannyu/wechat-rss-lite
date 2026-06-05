@@ -222,6 +222,8 @@ async def test_api_exposes_admin_accounts_and_subscriptions(tmp_path) -> None:
     assert "subscribedIds" in admin.text
     assert "验证处理" not in admin.text
     assert "subscriptionList" in admin.text
+    assert "jobProgressPanel" in admin.text
+    assert "poll?background=true" in admin.text
     assert "switch-btn" in admin.text
     assert "复制 RSS" in admin.text
     assert "黑名单管理" in admin.text
@@ -302,6 +304,20 @@ async def test_api_exposes_admin_accounts_and_subscriptions(tmp_path) -> None:
     assert imported.json()["imported"] == 3
     assert categories.json()[0]["subscription_count"] >= 1
     assert {item["id"] for item in subscriptions.json()} >= {"acct", "alpha", "beta", "gamma"}
+
+
+async def test_local_login_sessions_survive_provider_recreation(tmp_path) -> None:
+    repo = SQLiteRepository(tmp_path / "test.db")
+    first_provider = LocalQrLoginProvider(base_url="http://test", repository=repo)
+
+    session = await first_provider.create_session()
+    second_provider = LocalQrLoginProvider(base_url="http://test", repository=repo)
+
+    confirmed = await second_provider.confirm_session(session.id)
+    credential = await second_provider.complete_session(session.id)
+
+    assert confirmed.status == "confirmed"
+    assert credential.extra["session_id"] == session.id
 
 
 async def test_refresh_downloaded_articles_refetches_and_overwrites(tmp_path) -> None:

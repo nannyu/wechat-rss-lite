@@ -11,3 +11,6 @@ build/
 # Local environment (secrets)
 .env
 .env.local
+
+# Vercel local build output
+.vercel/

@@ -108,6 +108,24 @@ class PollResult:
 
 
 @dataclass(frozen=True)
+class BackgroundJob:
+    id: str
+    kind: str
+    status: str = "queued"
+    target: str = ""
+    total: int = 0
+    processed: int = 0
+    succeeded: int = 0
+    failed: int = 0
+    message: str = ""
+    result: dict[str, object] = field(default_factory=dict)
+    error: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class NotificationEvent:
     kind: str
     message: str

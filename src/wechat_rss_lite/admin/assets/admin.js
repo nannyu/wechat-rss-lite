@@ -81,7 +81,7 @@
         const text = await res.text();
         let data = null;
         try { data = JSON.parse(text); } catch {}
-        if (!res.ok) throw new Error(data?.detail || data?.message || res.statusText || '请求失败');
+        if (!res.ok) throw new Error(data?.detail || data?.error || data?.message || `${res.status || ''} ${res.statusText || '请求失败'}`.trim());
         return { ok: true, data, text };
       } catch (err) {
         showToast(err.message, true);
@@ -101,6 +101,15 @@
         showToast(err.message, true);
         return { ok: false, data: null, text: err.message };
       }
+    }
+
+    function proxiedPath(path) {
+      const prefix = window.__AINOW_WECHAT_RSS_PROXY_PREFIX__ || "";
+      return prefix ? `${prefix}${path}` : path;
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     function escapeHtml(value) {
@@ -495,12 +504,22 @@
           <div class="row" style="gap: 8px; margin-top: auto;">
             <button class="icon-button secondary" title="复制 RSS" data-action="copy-feed"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
             <button class="icon-button secondary" title="轮询更新" onclick="pollSubscription('${item.id}')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg></button>
+            <input class="history-count-input" type="number" min="1" max="500" step="1" value="20" title="历史拉取篇数" aria-label="历史拉取篇数">
+            <button class="icon-button secondary" title="拉取历史文章" data-action="fetch-history"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"></path><path d="M3 3v6h6"></path><path d="M12 7v5l3 2"></path></svg></button>
             <button class="icon-button secondary" title="重新拉取文章" onclick="refreshSubscriptionArticles('${item.id}', this)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M3 21v-5h5"></path><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg></button>
             <button class="icon-button secondary" title="查看本地文章" onclick="openReaderForSubscription('${item.id}')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg></button>
             <button class="icon-button danger" style="margin-left: auto;" title="取消订阅" onclick="deleteSubscription('${item.id}')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
           </div>
+          <div class="history-progress" hidden>
+            <div class="history-progress-bar"><span style="width:0%"></span></div>
+            <div class="history-progress-text">准备拉取历史文章...</div>
+          </div>
         `;
         div.querySelector('[data-action="copy-feed"]').onclick = () => copyText(feedUrl);
+        div.querySelector('[data-action="fetch-history"]').onclick = function() {
+          const input = div.querySelector('.history-count-input');
+          fetchSubscriptionHistory(item.id, Number(input.value || 20), this, div.querySelector('.history-progress'));
+        };
         // Setup switch
         div.querySelector('.switch-btn').onclick = async function() {
           const isEn = this.classList.contains('on');
@@ -528,19 +547,33 @@
     }
 
     async function pollAll() {
-      showToast("开始后台轮询全部...");
-      await requestJson("/poll", { method: "POST", body: "{}" });
-      showToast("轮询请求已发送");
+      showToast("正在创建后台轮询任务...");
+      const res = await requestJson("/poll?background=true", { method: "POST", body: "{}" });
+      if (!res.ok || !res.data?.id) return;
+      showToast("后台轮询任务已创建，可离开当前页面");
+      const job = await trackJobProgress(res.data.id, "轮询全部公众号");
+      if (job) {
+        showToast(job.status === "succeeded"
+          ? `轮询完成：保存 ${job.succeeded || 0} 篇，失败 ${job.failed || 0} 篇`
+          : `轮询失败：${job.error || job.message || "请查看任务详情"}`,
+          job.status !== "succeeded");
+      }
       loadSubscriptions();
     }
 
     async function pollSubscription(id) {
-      showToast("正在轮询更新...");
-      const res = await requestJson(`/subscriptions/${encodeURIComponent(id)}/poll`, { method: "POST", body: "{}" });
-      if (res.ok) {
-        showToast("轮询完成");
-        loadSubscriptions();
+      showToast("正在创建后台轮询任务...");
+      const res = await requestJson(`/subscriptions/${encodeURIComponent(id)}/poll?background=true`, { method: "POST", body: "{}" });
+      if (!res.ok || !res.data?.id) return;
+      const label = `轮询 ${subscriptionTitle(id)}`;
+      const job = await trackJobProgress(res.data.id, label);
+      if (job) {
+        showToast(job.status === "succeeded"
+          ? `轮询完成：保存 ${job.succeeded || 0} 篇，失败 ${job.failed || 0} 篇`
+          : `轮询失败：${job.error || job.message || "请查看任务详情"}`,
+          job.status !== "succeeded");
       }
+      loadSubscriptions();
     }
 
     async function refreshAllDownloadedArticles(button) {
@@ -553,18 +586,161 @@
       await runRefreshRequest(`/subscriptions/${encodeURIComponent(id)}/articles/refresh`, button, "公众号文章重新拉取完成");
     }
 
+    function updateHistoryProgress(progressEl, { processed, target, stored, failed, message, done, active }) {
+      if (!progressEl) return;
+      progressEl.hidden = false;
+      const displayProcessed = active ? Math.min(target, processed + 1) : processed;
+      const percent = target > 0 ? Math.min(100, Math.round((displayProcessed / target) * 100)) : 0;
+      const bar = progressEl.querySelector('.history-progress-bar span');
+      const text = progressEl.querySelector('.history-progress-text');
+      if (bar) bar.style.width = `${percent}%`;
+      if (text) {
+        text.textContent = `${message} ${displayProcessed}/${target}，保存 ${stored}，失败 ${failed}`;
+      }
+      progressEl.classList.toggle('done', Boolean(done && failed === 0));
+      progressEl.classList.toggle('error', Boolean(done && failed > 0));
+    }
+
+    function jobDone(job) {
+      return ["succeeded", "failed"].includes(job?.status);
+    }
+
+    function jobProgress(job) {
+      const total = Number(job?.total || 0);
+      const processed = Number(job?.processed || 0);
+      const failed = Number(job?.failed || 0);
+      return {
+        processed,
+        target: total,
+        stored: Number(job?.succeeded || 0),
+        failed,
+        message: job?.error || job?.message || "后台任务运行中",
+        done: jobDone(job),
+      };
+    }
+
+    function subscriptionTitle(id) {
+      const item = subscriptionsCache.find(subscription => subscription.id === id);
+      return item?.title || id;
+    }
+
+    function safeJobElementId(jobId) {
+      return `job-progress-${String(jobId).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+    }
+
+    function updateTaskProgress(job, label) {
+      const panel = document.getElementById("jobProgressPanel");
+      if (!panel || !job?.id) return;
+      panel.hidden = false;
+      const progress = jobProgress(job);
+      const percent = progress.target > 0
+        ? Math.min(100, Math.round((progress.processed / progress.target) * 100))
+        : (progress.done ? 100 : 0);
+      let item = document.getElementById(safeJobElementId(job.id));
+      if (!item) {
+        item = document.createElement("div");
+        item.id = safeJobElementId(job.id);
+        panel.prepend(item);
+      }
+      item.className = `job-progress-item${progress.done && progress.failed === 0 ? " done" : ""}${progress.done && progress.failed > 0 ? " error" : ""}`;
+      item.innerHTML = `
+        <div class="job-progress-head">
+          <span>${escapeHtml(label || job.kind || "后台任务")}</span>
+          <span>${percent}%</span>
+        </div>
+        <div class="job-progress-bar"><span style="width:${percent}%"></span></div>
+        <div class="job-progress-message">${escapeHtml(progress.message)} ${progress.processed}/${progress.target}，成功 ${progress.stored}，失败 ${progress.failed}</div>
+      `;
+    }
+
+    async function trackJobProgress(jobId, label) {
+      return await pollBackgroundJob(
+        jobId,
+        nextJob => updateTaskProgress(nextJob, label),
+        nextJob => updateTaskProgress(nextJob, label),
+      );
+    }
+
+    async function pollBackgroundJob(jobId, onUpdate, onDone) {
+      let lastJob = null;
+      for (;;) {
+        const res = await requestJson(`/jobs/${encodeURIComponent(jobId)}`);
+        if (!res.ok) return null;
+        lastJob = res.data;
+        if (onUpdate) onUpdate(lastJob);
+        if (jobDone(lastJob)) break;
+        await sleep(2000);
+      }
+      if (onDone) onDone(lastJob);
+      return lastJob;
+    }
+
+    async function fetchSubscriptionHistory(id, count, button, progressEl) {
+      const normalizedCount = Math.max(1, Math.min(500, Number.isFinite(count) ? Math.floor(count) : 20));
+      const originalText = button ? button.textContent : "";
+      if (button) {
+        button.disabled = true;
+        if (originalText.trim()) button.textContent = "拉取中...";
+      }
+      updateHistoryProgress(progressEl, { processed: 0, target: normalizedCount, stored: 0, failed: 0, message: "正在创建后台任务", done: false });
+      showToast(`已提交后台拉取任务：${normalizedCount} 篇历史文章`);
+      const params = new URLSearchParams({
+          count: String(normalizedCount),
+          page_size: "20",
+          older_than_local: "true",
+          background: "true",
+      });
+      const res = await requestJson(`/subscriptions/${encodeURIComponent(id)}/history?${params.toString()}`, { method: "POST", body: "{}" });
+      if (!res.ok) {
+        updateHistoryProgress(progressEl, { processed: 0, target: normalizedCount, stored: 0, failed: 1, message: "任务创建失败", done: true });
+      } else {
+        const job = await pollBackgroundJob(
+          res.data.id,
+          nextJob => updateHistoryProgress(progressEl, jobProgress(nextJob)),
+          nextJob => {
+            const progress = jobProgress(nextJob);
+            updateHistoryProgress(progressEl, { ...progress, message: nextJob.status === "succeeded" ? "历史拉取完成" : "历史拉取失败", done: true });
+          },
+        );
+        if (job) {
+          showToast(job.status === "succeeded"
+            ? `历史拉取完成：保存 ${job.succeeded || 0} 篇，失败 ${job.failed || 0} 篇`
+            : `历史拉取失败：${job.error || job.message || "请查看任务详情"}`,
+            job.status !== "succeeded");
+        }
+      }
+      if (button) {
+        button.disabled = false;
+        if (originalText.trim()) button.textContent = originalText;
+      }
+      loadSubscriptions();
+      if (currentReaderArticleUrl) loadDownloadedArticles();
+    }
+
     async function runRefreshRequest(path, button, successPrefix) {
       const originalText = button ? button.textContent : "";
       if (button) {
         button.disabled = true;
         if (originalText.trim()) button.textContent = "拉取中...";
       }
-      showToast("正在重新拉取文章...");
-      const res = await requestJson(path, { method: "POST", body: "{}" });
+      showToast("已提交后台重新拉取任务");
+      const separator = path.includes("?") ? "&" : "?";
+      const res = await requestJson(`${path}${separator}background=true`, { method: "POST", body: "{}" });
+      if (res.ok && res.data?.id) {
+        const job = await trackJobProgress(res.data.id, successPrefix);
+        if (job?.status === "succeeded") {
+          showToast(`${successPrefix}：成功 ${job.succeeded || 0} 篇，失败 ${job.failed || 0} 篇`);
+          loadSubscriptions();
+          loadDownloadedArticles();
+        } else if (job) {
+          showToast(`重新拉取失败：${job.error || job.message || "未知错误"}`, true);
+        }
+      }
       if (button) {
         button.disabled = false;
         if (originalText.trim()) button.textContent = originalText;
       }
+      if (res.ok && res.data?.id) return;
       if (!res.ok) return;
       const refreshed = res.data?.refreshed ?? 0;
       const failed = res.data?.failed ?? 0;
@@ -839,7 +1015,7 @@
       const params = new URLSearchParams({ url: articleUrl });
       const token = adminToken.trim();
       if (token) params.set("token", token);
-      return `/articles/read/html?${params.toString()}`;
+      return proxiedPath(`/articles/read/html?${params.toString()}`);
     }
 
     function renderArticleReader(article) {
@@ -865,20 +1041,28 @@
         button.disabled = true;
         if (originalText.trim()) button.textContent = "拉取中...";
       }
-      showToast("正在重新拉取这篇文章...");
-      const res = await requestJson(`/articles/refresh?url=${encodeURIComponent(url)}`, { method: "POST", body: "{}" });
+      showToast("已提交后台重新拉取任务");
+      const res = await requestJson(`/articles/refresh?url=${encodeURIComponent(url)}&background=true`, { method: "POST", body: "{}" });
+      if (!res.ok || !res.data?.id) {
+        if (button) {
+          button.disabled = false;
+          if (originalText.trim()) button.textContent = originalText;
+        }
+        return;
+      }
+      const job = await trackJobProgress(res.data.id, "重新拉取当前文章");
       if (button) {
         button.disabled = false;
         if (originalText.trim()) button.textContent = originalText;
       }
-      if (!res.ok) return;
-      const failed = res.data?.failed ?? 0;
-      const firstError = res.data?.errors?.[0]?.error;
+      if (!job) return;
       showToast(
-        failed ? (firstError ? `重新拉取失败：${firstError}` : "重新拉取失败") : "文章已重新拉取",
-        failed > 0
+        job.status === "succeeded" && Number(job.failed || 0) === 0
+          ? "文章已重新拉取"
+          : `重新拉取失败：${job.error || job.message || "请查看任务详情"}`,
+        job.status !== "succeeded" || Number(job.failed || 0) > 0
       );
-      if (!failed && reopen) {
+      if (job.status === "succeeded" && Number(job.failed || 0) === 0 && reopen) {
         await openDownloadedArticle(url);
       }
     }
@@ -999,12 +1183,23 @@
       
       const pre = document.getElementById('importResult');
       pre.style.display = 'block';
-      pre.textContent = "导入中...";
+      pre.textContent = "正在创建后台导入任务...";
       
-      const res = await requestForm("/subscriptions/import", form);
+      const res = await requestForm("/subscriptions/import?background=true", form);
       if (res.ok) {
-        showToast("导入完成");
-        pre.textContent = JSON.stringify(res.data, null, 2);
+        showToast("导入任务已在后台开始");
+        if (res.data?.id) {
+          const job = await pollBackgroundJob(res.data.id, nextJob => {
+            pre.textContent = JSON.stringify(nextJob, null, 2);
+          });
+          if (job?.status === "succeeded") {
+            showToast("导入完成");
+          } else if (job) {
+            showToast(`导入失败：${job.error || job.message || "未知错误"}`, true);
+          }
+        } else {
+          pre.textContent = JSON.stringify(res.data, null, 2);
+        }
         loadSubscriptions();
       } else {
         pre.textContent = "导入失败: " + res.text;

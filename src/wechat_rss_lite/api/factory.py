@@ -11,10 +11,10 @@ from ..storage import SQLiteRepository
 from ..wechat_login import WeChatMpLoginProvider
 
 
-def build_login_provider(settings: Settings) -> LoginProvider:
+def build_login_provider(settings: Settings, repository: SQLiteRepository | None = None) -> LoginProvider:
     provider = settings.login_provider.strip().lower()
     if provider == "local":
-        return LocalQrLoginProvider(base_url=settings.site_url)
+        return LocalQrLoginProvider(base_url=settings.site_url, repository=repository)
     if provider in {"manual", "disabled", "none"}:
         return ManualLoginProvider()
     return WeChatMpLoginProvider(timeout=settings.request_timeout_seconds)
